@@ -1,10 +1,11 @@
 import gym
 import numpy as np
 import random
+import keras.backend as K
 from PIL import Image
 from keras import Model
 from keras.models import Sequential, load_model
-from keras.layers import Dense, Dropout, Input, Activation, Convolution2D, Flatten
+from keras.layers import Dense, Dropout, Input, Activation, Convolution2D, Flatten, Lambda
 from keras.optimizers import Adam
 
 from copy import deepcopy
@@ -21,8 +22,9 @@ def create_mountain_cart_model(input_shape, action_n):
     x = Activation('relu')(x)
     x = Dense(24)(x)
     x = Activation('relu')(x)
-    x = Dense(action_n)(x)
-    action = Activation('linear')(x)
+    x = Dense(action_n + 1, activation='linear')(x)
+    action = Lambda(lambda i: K.expand_dims(i[:, 0], -1) + i[:, 1:] - K.mean(
+        i[:, 1:], keepdims=True), output_shape=(action_n,))(x)
     model = Model(inputs=inputs, outputs=action)
     return model
 
@@ -48,8 +50,9 @@ def create_atari_model(input_shape, action_n):
     x = Flatten()(x)
     x = Dense(256)(x)
     x = Activation('relu')(x)
-    x = Dense(action_n)(x)
-    action = Activation('linear')(x)
+    x = Dense(action_n + 1, activation='linear')(x)
+    action = Lambda(lambda i: K.expand_dims(i[:, 0], -1) + i[:, 1:] - K.mean(
+        i[:, 1:], keepdims=True), output_shape=(action_n,))(x)
     model = Model(inputs=inputs, outputs=action)
     return model
 
@@ -71,9 +74,9 @@ def reward_process_atari(reward):
     return reward
 
 
-class DQNv2():
+class DDQN():
     def __init__(self, env, model_factory, batch_states_process, observation_process, input_shape=None, reward_process=None,
-                 epsilon_decay=0.999, epsilon_min=0.10, memory_size=10000, gamma=0.89, trials=5000, trial_size=250, batch_size=256, lr=0.0000625):
+                 epsilon_decay=0.999, epsilon_min=0.10, memory_size=10000, gamma=0.89, trials=5000, trial_size=250, batch_size=64, lr=0.001, tau=None):
         self.env = env
         self.epsilon = 1.0
         self.epsilon_min = epsilon_min
@@ -93,6 +96,12 @@ class DQNv2():
         self.observation_process = observation_process
         self.reward_process = reward_process
         self.input_shape = input_shape
+        self.tau =
+        if self.tau is None:
+            if(len(state_dim) < 3):
+                self.tau = 1e-2
+            else:
+                self.tau = 1.0
         if self.input_shape is None:
             self.input_shape = self.env.observation_space.shape
     # def _create_atari
@@ -144,24 +153,25 @@ class DQNv2():
         states = self.batch_states_process(states)
         actions = np.array(actions)
         rewards = np.array(rewards)
-        next_states = np.array(next_states)
+        next_states = self.batch_states_process(np.array(next_states))
         dones = np.array(dones)
-        Q_targets = self.target_model.predict_on_batch(states)
+        Q_targets = self.target_model.predict_on_batch(next_states)
         Q_targets = np.max(Q_targets, axis=1).flatten()
         Q_targets *= self.gamma
         Q_targets *= dones
         Rs = rewards + Q_targets
-        targets = np.zeros((self.batch_size, self.env.action_space.n))
+        targets = self.target_model.predict_on_batch(states)
         for idx, (target, R, action) in enumerate(zip(targets, Rs, actions)):
-            target[action] = R
-
+            targets[idx][action] = R
         self.model.train_on_batch(states, targets)
+        self.target_update()
 
     def target_update(self):
         weights = self.model.get_weights()
         target_weights = self.target_model.get_weights()
         for i in range(len(target_weights)):
-            target_weights[i] = weights[i]
+            target_weights[i] = self.tau * weights[i] + \
+                (1 - self.tau) * target_weights[i]
         self.target_model.set_weights(target_weights)
 
     def init_models(self):
@@ -186,13 +196,12 @@ class DQNv2():
             for step in range(self.trial_size):
                 state, action, reward, next_state, done, info = self.execute_step(
                     current_state)
-                if(trial % 15 == 0):
-                    self.env.render()
+                # if(trial % 15 == 0):
+                #     self.env.render()
                 # print(trial, step)
-                # self.env.render()
+                self.env.render()
                 self.remember(state, action, reward, next_state, done)
                 self.replay()
-                self.target_update()
                 current_state = next_state
                 total_rewards += reward
                 if done:
@@ -213,7 +222,7 @@ class DQNv2():
 
     def test(self):
         for t in range(5):
-            current_state = self.state_process(self.env.reset())
+            current_state = self.observation_process(self.env.reset())
             for steps in range(self.trial_size):
                 _, _, reward, current_state, done, _ = self.execute_step(
                     current_state)
@@ -231,10 +240,10 @@ def main():
     #                   reward_process=reward_process_atari,
     #                   input_shape=(84, 84, 1))
     env = gym.make("MountainCar-v0")
-    dqn_agent = DQNv2(env=env, model_factory=create_mountain_cart_model,
-                      batch_states_process=batch_states_process_mountain_cart,
-                      observation_process=observation_process_mountain_cart,
-                      reward_process=reward_process_mountain_cart)
+    dqn_agent = DDQN(env=env, model_factory=create_mountain_cart_model,
+                     batch_states_process=batch_states_process_mountain_cart,
+                     observation_process=observation_process_mountain_cart,
+                     reward_process=reward_process_mountain_cart)
     if TEST:
         dqn_agent.load_model()
         dqn_agent.test()
