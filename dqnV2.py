@@ -32,7 +32,6 @@ def batch_states_process_mountain_cart(states):
 
 
 def observation_process_mountain_cart(state):
-    print(state.shape)
     return state.reshape(1, 2)
 
 
@@ -65,17 +64,16 @@ def observation_process_atari(state):
     img = img.resize(INPUT_SHAPE).convert(
         'L')  # resize and convert to grayscale
     processed_state = np.array(img) / 255
-    # print(processed_state.shape)
     return processed_state.reshape(1, 84, 84)
 
 
 def reward_process_atari(reward):
-    return np.clip(reward, -1., 1.)
+    return reward
 
 
 class DQNv2():
     def __init__(self, env, model_factory, batch_states_process, observation_process, input_shape=None, reward_process=None,
-                 epsilon_decay=0.955, epsilon_min=0.10, memory_size=10000, gamma=0.85, trials=600, trial_size=250, batch_size=64, lr=0.005):
+                 epsilon_decay=0.999, epsilon_min=0.10, memory_size=10000, gamma=0.89, trials=5000, trial_size=250, batch_size=256, lr=0.0000625):
         self.env = env
         self.epsilon = 1.0
         self.epsilon_min = epsilon_min
@@ -117,7 +115,6 @@ class DQNv2():
         self.memory.append([state, action, reward, new_state, done])
 
     def execute_step(self, state):
-        # print(state)
         action = self.action(state)
         next_state, reward, done, info = self.env.step(action)
         next_state = self.observation_process(next_state)
@@ -174,34 +171,44 @@ class DQNv2():
         self.target_model = self.create_model(
             self.input_shape, self.env.action_space.n)
         self.model.compile(loss="mean_squared_error", optimizer=Adam(
-            lr=self.learning_rate, clipnorm=1.0))
+            lr=self.learning_rate, epsilon=1.5*10e-4, clipnorm=1.0))
         self.target_model.compile(loss="mean_squared_error", optimizer=Adam(
-            lr=self.learning_rate, clipnorm=1.0))
+            lr=self.learning_rate, epsilon=1.5*10e-4, clipnorm=1.0))
         self.target_update()
 
-    def train(self, model_name="success.model"):
+    def train(self, model_name="success.model", min_trials=100, win_ticks=-110):
         if self.model is None or self.target_model is None:
             self.init_models()
+        self.total_rewards_list = deque(maxlen=min_trials)
         for trial in range(self.trials):
             current_state = self.observation_process(self.env.reset())
+            total_rewards = 0
             for step in range(self.trial_size):
                 state, action, reward, next_state, done, info = self.execute_step(
                     current_state)
+                if(trial % 15 == 0):
+                    self.env.render()
                 # print(trial, step)
-                self.env.render()
+                # self.env.render()
                 self.remember(state, action, reward, next_state, done)
                 self.replay()
                 self.target_update()
                 current_state = next_state
+                total_rewards += reward
                 if done:
                     break
+            self.total_rewards_list.append(total_rewards)
             if step >= self.env.spec.max_episode_steps - 1:
-                print("Failed to complete in trial {}".format(trial), reward)
+                print("Failed to complete in trial {}".format(
+                    trial), total_rewards)
             else:
-                print("Completed in {} trials".format(trial), reward)
+                print("Completed in {} trials".format(trial), total_rewards)
                 # self.model.save(model_name)
             if trial % 100 == 0:
                 self.model.save(model_name)
+            if trial >= min_trials and sum(self.total_rewards_list)/len(self.total_rewards_list) >= win_ticks:
+                print("Solved in {} trials".format(trial), total_rewards)
+                break
         self.model.save(model_name)
 
     def test(self):
@@ -218,16 +225,16 @@ class DQNv2():
 
 def main():
     env = gym.make("Pong-v0")
-    dqn_agent = DQNv2(env=env, model_factory=create_atari_model,
-                      batch_states_process=batch_states_process_atari,
-                      observation_process=observation_process_atari,
-                      reward_process=reward_process_atari,
-                      input_shape=(84, 84, 1))
-    # env = gym.make("MountainCar-v0")
-    # dqn_agent = DQNv2(env=env, model_factory=create_mountain_cart_model,
-    #                   batch_states_process=batch_states_process_mountain_cart,
-    #                   observation_process=observation_process_mountain_cart,
-    #                   reward_process=reward_process_mountain_cart)
+    # dqn_agent = DQNv2(env=env, model_factory=create_atari_model,
+    #                   batch_states_process=batch_states_process_atari,
+    #                   observation_process=observation_process_atari,
+    #                   reward_process=reward_process_atari,
+    #                   input_shape=(84, 84, 1))
+    env = gym.make("MountainCar-v0")
+    dqn_agent = DQNv2(env=env, model_factory=create_mountain_cart_model,
+                      batch_states_process=batch_states_process_mountain_cart,
+                      observation_process=observation_process_mountain_cart,
+                      reward_process=reward_process_mountain_cart)
     if TEST:
         dqn_agent.load_model()
         dqn_agent.test()
