@@ -13,7 +13,7 @@ from copy import deepcopy
 from collections import deque
 
 
-class A3C(Agent):
+class DistDQN(Agent):
     def __init__(self, env, model_factory, input_shape=None, batch_states_process=None, observation_process=None, reward_process=None, memory_size=10000):
         super().__init__(env, model_factory, input_shape, batch_states_process,
                          observation_process, reward_process, memory_size)

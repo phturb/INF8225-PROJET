@@ -13,7 +13,7 @@ from copy import deepcopy
 from collections import deque
 
 
-class DQNv3(Agent):
+class DQN(Agent):
     def __init__(self, env, model_factory, input_shape=None, batch_states_process=None, observation_process=None, reward_process=None, memory_size=10000,
                  epsilon_decay=0.999, epsilon_min=0.10, gamma=0.89, trials=5000, batch_size=64, lr=0.001):
         super().__init__(env, model_factory, input_shape, batch_states_process,

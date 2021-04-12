@@ -1,1 +1,1 @@
-from .ddqnV2 import DDQNv2
+from .ddqnV2 import DDQN

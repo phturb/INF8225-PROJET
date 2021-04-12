@@ -1,8 +1,12 @@
 import gym
 import argparse
-from projet.models import *
-from projet.dqn import DQNv3
-from projet.ddqn import DDQNv2
+from projet.models import create_atari_model, batch_states_process_atari, observation_process_atari,\
+    reward_process_atari, create_mountain_cart_model, batch_states_process_mountain_cart, observation_process_mountain_cart, reward_process_mountain_cart
+from projet.dqn import DQN
+from projet.ddqn import DDQN
+from projet.a3c import A3C
+from projet.distDQN import DistDQN
+from projet.nDQN import NDQN
 # from ddqn import DDQN
 
 
@@ -43,7 +47,7 @@ def main():
     env = gym.make(env_name)
 
     agent_choices = {
-        "dqn": DQNv3, "ddqn": DDQNv2, "a3c": DDQNv2, "distdqn": DDQNv2, "ndqn": DDQNv2
+        "dqn": DQN, "ddqn": DDQN, "a3c": A3C, "distdqn": DistDQN, "ndqn": NDQN
     }
 
     dqn_agent = agent_choices[args.agent](env=env,
