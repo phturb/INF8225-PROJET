@@ -71,7 +71,7 @@ def reward_process_atari(reward):
     return reward
 
 
-class A3C():
+class DQNv2():
     def __init__(self, env, model_factory, batch_states_process, observation_process, input_shape=None, reward_process=None,
                  epsilon_decay=0.999, epsilon_min=0.10, memory_size=10000, gamma=0.89, trials=5000, trial_size=250, batch_size=64, lr=0.001):
         self.env = env
@@ -154,7 +154,8 @@ class A3C():
         targets = self.target_model.predict_on_batch(states)
         for idx, (target, R, action) in enumerate(zip(targets, Rs, actions)):
             targets[idx][action] = R
-        self.model.train_on_batch(states, targets)
+        history = self.model.train_on_batch(states, targets, return_dict=True)
+        print(history)
         self.target_update()
 
     def target_update(self):
@@ -213,13 +214,15 @@ class A3C():
     def test(self):
         for t in range(5):
             current_state = self.observation_process(self.env.reset())
+            total_rewards = 0
             for steps in range(self.trial_size):
                 _, _, reward, current_state, done, _ = self.execute_step(
                     current_state)
                 self.env.render()
+                total_rewards += reward
                 if done:
-                    print(t + 1, reward)
                     break
+            print(t + 1, total_rewards)
 
 
 def main():

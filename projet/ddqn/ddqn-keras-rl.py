@@ -15,8 +15,8 @@ from keras.optimizers import Adam
 
 from collections import deque
 
-TRAIN = False
-TEST = True
+TRAIN = True
+TEST = False
 
 
 def create_model(input_shape, action_n, lr):
@@ -56,7 +56,7 @@ dqn = DQNAgent(model=model,
                nb_actions=nb_actions,
                memory=memory,
                processor=processor,
-               nb_steps_warmup=50000,
+               nb_steps_warmup=5000,
                gamma=.99,
                target_model_update=10000,
                train_interval=4,

@@ -12,11 +12,12 @@ from keras import Model
 from keras.models import Sequential, load_model
 from keras.layers import Dense, Dropout, Input, Activation
 from keras.optimizers import Adam
+from keras.callbacks import TensorBoard
 
 from collections import deque
 
-TRAIN = False
-TEST = True
+TRAIN = True
+TEST = False
 
 
 def create_model(input_shape, action_n, lr):
@@ -49,6 +50,10 @@ nb_actions = env.action_space.n
 lr = 0.005
 model = create_model(env.observation_space.shape, nb_actions, lr)
 print(model.summary())
+
+
+tb_log_dir = 'logs/tmp'
+tb_callback = TensorBoard()
 memory = SequentialMemory(limit=2000, window_length=1)
 policy = BoltzmannQPolicy()
 dqn = DQNAgent(model=model, nb_actions=nb_actions, memory=memory, nb_steps_warmup=32,
@@ -56,7 +61,8 @@ dqn = DQNAgent(model=model, nb_actions=nb_actions, memory=memory, nb_steps_warmu
 optimizer = Adam(lr=lr, clipnorm=1.0)
 dqn.compile(optimizer, metrics=['mae'])
 if TRAIN:
-    dqn.fit(env, nb_steps=50000, visualize=True, verbose=2)
+    dqn.fit(env, nb_steps=5000, visualize=True,
+            verbose=2, callbacks=[tb_callback])
     dqn.save_weights('dqn_keras_rl_{}_weights.h5f'.format(
         ENV_NAME), overwrite=True)
 if TEST:
