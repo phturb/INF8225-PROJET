@@ -21,7 +21,6 @@ class DQN(Agent):
         self.epsilon = 1.0
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
-        self.epsilon_min = 0.10
         self.gamma = gamma
         self.batch_size = batch_size
         self.learning_rate = lr
