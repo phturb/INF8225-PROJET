@@ -1,4 +1,3 @@
 {
-    "python.venvPath": "venv",
-    "python.pythonPath": "python"
+    "python.venvPath": "venv"
 }
