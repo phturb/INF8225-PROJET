@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 import random
+import math
 from PIL import Image
 from keras import Model
 from keras.models import Sequential, load_model
@@ -44,16 +45,20 @@ class DistDQN(Agent):
     def action(self, state):
         self.epsilon *= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
-        if False: #random.random() <= self.epsilon:
+        if random.random() <= self.epsilon:
             action = self.env.action_space.sample()
         else:
             p = np.array(self.model.predict(state)).reshape((self.atom_n, self.env.action_space.n))
             q = self.z.T @ p
             action = np.argmax(q[0])
+            # print(q[0])
+            # z = self.model.predict(state) # Return a list [1x51, 1x51, 1x51]
+            # z_concat = np.vstack(z)
+            # q = np.sum(np.multiply(z_concat, np.array(self.z)), axis=1) 
+            # action = np.argmax(q)
         return action
 
     def remember(self, state, action, reward, new_state, done):
-        # print(self.memory)
         self.memory.append([state, action, reward, new_state, done])
 
     def replay(self, reward):
@@ -81,15 +86,31 @@ class DistDQN(Agent):
         next_states = self.batch_states_process(np.array(next_states))
         dones = np.array(dones)
 
-        Q_targets = self.target_model.predict_on_batch(next_states)
-        Q_targets = np.max(Q_targets, axis=1).flatten()
+        p = np.array(self.model.predict_on_batch(next_states)).reshape((self.batch_size, self.atom_n, self.env.action_space.n))
+        q = (self.z.T @ p).reshape((self.batch_size, self.env.action_space.n))
+        optimal_actions = np.argmax(q, axis=1)
+
+        Q_targets = np.array(self.target_model.predict_on_batch(next_states)).reshape(self.batch_size, self.env.action_space.n, self.atom_n)
         Q_targets *= self.gamma
-        Q_targets *= dones
-        targets = self.target_model.predict_on_batch(states)
-        for _, (target, R, action, d, q_t) in enumerate(zip(targets, rewards, actions, dones, Q_targets)):
-            target[action] = R + q_t
-        # print(target)
-        loss = self.model.train_on_batch(states, targets)
+        #targets = self.target_model.predict_on_batch(states)
+        m_probs = [np.zeros((self.batch_size, self.atom_n)) for i in range(self.env.action_space.n)]
+        for _, (m_prob, R, action, d, q_t, o_action) in enumerate(zip(m_probs, rewards, actions, dones, Q_targets, optimal_actions)):
+            if d:
+                Tz = min(self.vmax, max(self.vmin, R))
+                bj = (Tz - self.vmin) / self.delta
+                m_l, m_u = math.floor(bj), math.ceil(bj)
+                m_prob[action][int(m_l)] += (m_u - bj)
+                m_prob[action][int(m_u)] += (bj - m_l)
+            else:
+                # TODO : Use vectors
+                for j in range(self.atom_n):
+                    Tz = min(self.vmax, max(self.vmin, R + self.gamma * self.z[j]))
+                    bj = (Tz - self.vmin) / self.delta
+                    m_l, m_u = math.floor(bj), math.ceil(bj)
+                    m_prob[action][int(m_l)] += q_t[o_action][j] * (m_u - bj)
+                    m_prob[action][int(m_u)] += q_t[o_action][j] * (bj - m_l)
+
+        loss = self.model.train_on_batch(states, m_prob)
         self.target_update()
         return loss
 
