@@ -32,7 +32,7 @@ class DistDQN(Agent):
         self.vmax = vmax
         self.atom_n = atom_n
         self.delta = (vmax-vmin) / (atom_n - 1)
-        self.z = np.array([vmin + (i)*(self.delta) for i in range(atom_n)]).reshape((atom_n, 1))
+        self.z = np.array([vmin + (i)*(self.delta) for i in range(atom_n)])
 
     def save_models(self, model_name_prefix):
         self.model.save(model_name_prefix)
@@ -48,14 +48,10 @@ class DistDQN(Agent):
         if random.random() <= self.epsilon:
             action = self.env.action_space.sample()
         else:
-            p = np.array(self.model.predict(state)).reshape((self.atom_n, self.env.action_space.n))
-            q = self.z.T @ p
-            action = np.argmax(q[0])
-            # print(q[0])
-            # z = self.model.predict(state) # Return a list [1x51, 1x51, 1x51]
-            # z_concat = np.vstack(z)
-            # q = np.sum(np.multiply(z_concat, np.array(self.z)), axis=1) 
-            # action = np.argmax(q)
+
+            p = self.model.predict(state) # Return a list [1x51, 1x51, 1x51]
+            q = np.dot(p, self.z)
+            action = np.argmax(q)
         return action
 
     def remember(self, state, action, reward, new_state, done):
@@ -86,16 +82,13 @@ class DistDQN(Agent):
         next_states = self.batch_states_process(np.array(next_states))
         dones = np.array(dones)
 
-        p = np.array(self.model.predict_on_batch(next_states)).reshape((self.batch_size, self.atom_n, self.env.action_space.n))
-        q = (self.z.T @ p).reshape((self.batch_size, self.env.action_space.n))
-        optimal_actions = np.argmax(q, axis=1)
-
-        Q_targets = np.array(self.target_model.predict_on_batch(next_states)).reshape(self.batch_size, self.env.action_space.n, self.atom_n)
-        Q_targets *= self.gamma
-        #targets = self.target_model.predict_on_batch(states)
+        z = self.model.predict(next_states)
+        z_ = self.target_model.predict(next_states)
+        q = np.dot(z,self.z)
+        optimal_actions = np.argmax(q, axis=0)
         m_probs = [np.zeros((self.batch_size, self.atom_n)) for i in range(self.env.action_space.n)]
-        for _, (m_prob, R, action, d, q_t, o_action) in enumerate(zip(m_probs, rewards, actions, dones, Q_targets, optimal_actions)):
-            if d:
+        for i, (m_prob, R, action, d, o_action) in enumerate(zip(m_probs, rewards, actions, dones, optimal_actions)):
+            if d != 1:
                 Tz = min(self.vmax, max(self.vmin, R))
                 bj = (Tz - self.vmin) / self.delta
                 m_l, m_u = math.floor(bj), math.ceil(bj)
@@ -107,10 +100,10 @@ class DistDQN(Agent):
                     Tz = min(self.vmax, max(self.vmin, R + self.gamma * self.z[j]))
                     bj = (Tz - self.vmin) / self.delta
                     m_l, m_u = math.floor(bj), math.ceil(bj)
-                    m_prob[action][int(m_l)] += q_t[o_action][j] * (m_u - bj)
-                    m_prob[action][int(m_u)] += q_t[o_action][j] * (bj - m_l)
+                    m_prob[action][int(m_l)] += z_[o_action][i][j] * (m_u - bj)
+                    m_prob[action][int(m_u)] += z_[o_action][i][j] * (bj - m_l)
 
-        loss = self.model.train_on_batch(states, m_prob)
+        loss = self.model.train_on_batch(states, m_probs)
         self.target_update()
         return loss
 
