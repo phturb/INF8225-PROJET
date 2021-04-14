@@ -70,7 +70,7 @@ def main():
         dqn_agent.train(render=args.render)
     else:
         dqn_agent.load_model(args.model_name)
-    dqn_agent.test()
+    dqn_agent.test(render=args.render)
 
 
 if __name__ == "__main__":
