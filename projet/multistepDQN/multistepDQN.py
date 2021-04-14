@@ -80,8 +80,9 @@ class MultistepDQN(MultistepAgent):
         targets = self.target_model.predict_on_batch(states)
         for _, (target, R, action) in enumerate(zip(targets, Rs, actions)):
             target[action] = R
-        self.model.train_on_batch(states, targets)
+        loss = self.model.train_on_batch(states, targets)
         self.target_update()
+        return loss
 
     def target_update(self):
         weights = self.model.get_weights()
@@ -101,3 +102,6 @@ class MultistepDQN(MultistepAgent):
         self.target_model.compile(loss="mean_squared_error", optimizer=RMSprop(
             lr=self.learning_rate, epsilon=1.5*10e-4))
         self.target_update()
+
+    def get_model(self):
+        return self.model
