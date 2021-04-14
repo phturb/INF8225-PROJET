@@ -1,2 +1,2 @@
-model_checkpoint_path: "dqn_keras_rl_MountainCar-v0_weights.h5f"
-all_model_checkpoint_paths: "dqn_keras_rl_MountainCar-v0_weights.h5f"
+model_checkpoint_path: "dqn_keras_rl_CartPole-v1_weights.h5f"
+all_model_checkpoint_paths: "dqn_keras_rl_CartPole-v1_weights.h5f"
