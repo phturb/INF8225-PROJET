@@ -2,20 +2,20 @@ import gym
 import numpy as np
 import random
 from PIL import Image
-from keras import Model
+from keras.optimizers import RMSprop
 from keras.models import Sequential, load_model
 from keras.layers import Dense, Dropout, Input, Activation, Convolution2D, Flatten
 from keras.optimizers import Adam
 
-from projet.agent import Agent
+from projet.agent import Agent, MultistepAgent
 
 from copy import deepcopy
 from collections import deque
 
 
-class DQN(Agent):
+class MultistepDQN(MultistepAgent):
     def __init__(self, env, model_factory, input_shape=None, batch_states_process=None, observation_process=None, reward_process=None, memory_size=10000,
-                 epsilon_decay=0.995, epsilon_min=0.10, gamma=0.99, trials=5000, batch_size=32, lr=0.005):
+                 epsilon_decay=0.999, epsilon_min=0.10, gamma=0.99, trials=5000, batch_size=64, lr=0.001):
         super().__init__(env, model_factory, input_shape, batch_states_process,
                          observation_process, reward_process, memory_size)
         self.epsilon = 1.0
@@ -46,7 +46,6 @@ class DQN(Agent):
         return action
 
     def remember(self, state, action, reward, new_state, done):
-        # print(self.memory)
         self.memory.append([state, action, reward, new_state, done])
 
     def replay(self, reward):
@@ -73,15 +72,14 @@ class DQN(Agent):
         rewards = np.array(rewards)
         next_states = self.batch_states_process(np.array(next_states))
         dones = np.array(dones)
-
         Q_targets = self.target_model.predict_on_batch(next_states)
         Q_targets = np.max(Q_targets, axis=1).flatten()
         Q_targets *= self.gamma
         Q_targets *= dones
+        Rs = rewards + Q_targets
         targets = self.target_model.predict_on_batch(states)
-        for _, (target, R, action, d, q_t) in enumerate(zip(targets, rewards, actions, dones, Q_targets)):
-            target[action] = R + q_t
-        # print(target)
+        for _, (target, R, action) in enumerate(zip(targets, Rs, actions)):
+            target[action] = R
         self.model.train_on_batch(states, targets)
         self.target_update()
 
@@ -98,8 +96,8 @@ class DQN(Agent):
         self.model.summary()
         self.target_model = self.create_model(
             self.input_shape, self.env.action_space.n)
-        self.model.compile(loss="mean_squared_error", optimizer=Adam(
-            lr=self.learning_rate))
-        self.target_model.compile(loss="mean_squared_error", optimizer=Adam(
-            lr=self.learning_rate))
+        self.model.compile(loss="mean_squared_error", optimizer=RMSprop(
+            lr=self.learning_rate, epsilon=1.5*10e-4))
+        self.target_model.compile(loss="mean_squared_error", optimizer=RMSprop(
+            lr=self.learning_rate, epsilon=1.5*10e-4))
         self.target_update()

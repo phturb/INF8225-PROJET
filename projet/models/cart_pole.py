@@ -5,9 +5,8 @@ from keras import Model
 from keras.layers import Dense, Dropout, Input, Activation, Convolution2D, Flatten
 
 
-
-def create_mountain_cart_model(input_shape, action_n):
-    inputs = Input(shape=input_shape[0])
+def create_cart_pole_model(input_shape, action_n):
+    inputs = Input(shape=4)
     x = Dense(24)(inputs)
     x = Activation('relu')(x)
     x = Dense(64)(x)
@@ -19,13 +18,13 @@ def create_mountain_cart_model(input_shape, action_n):
     model = Model(inputs=inputs, outputs=action)
     return model
 
-def batch_states_process_mountain_cart(states):
-    return np.array(states).reshape(-1, 2)
+def batch_states_process_cart_pole(states):
+    return np.array(states).reshape(-1, 4)
 
 
-def observation_process_mountain_cart(state):
-    return state.reshape(1, 2)
+def observation_process_cart_pole(state):
+    return state.reshape(1, 4)
 
 
-def reward_process_mountain_cart(reward):
+def reward_process_cart_pole(reward):
     return reward

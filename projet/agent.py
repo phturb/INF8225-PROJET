@@ -29,6 +29,7 @@ class Agent():
         raise NotImplementedError()
 
     def action(self, state):
+        """Selection d'action"""
         raise NotImplementedError()
 
     def replay(self, reward):
@@ -43,30 +44,41 @@ class Agent():
     def execute_action(self, action):
         next_state, reward, done, info = self.env.step(action)
         next_state = self.observation_process(deepcopy(next_state))
-        if self.reward_process is not None:
-            reward = self.reward_process(reward)
+        # if self.reward_process is not None:
+        #     reward = self.reward_process(reward)
         return next_state, reward, done, info
 
-    def train(self, trials=5000, trial_size=250, model_name="success.model", min_trials=100, render=False,
-              solve_condition=lambda total_rewards_list, trial, min_trials: trial >= 100 and sum(total_rewards_list)/len(total_rewards_list) >= -110):
+    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", min_trials=100, render=False,
+              solve_condition=lambda total_rewards_list, trial, min_trials, threshold: trial >= 100 and sum(total_rewards_list)/len(total_rewards_list) >= threshold):
         self.total_rewards_list = deque(maxlen=min_trials)
-        for trial in range(trials):
+        if trial_size is None:
+            trial_size = self.env.spec.max_episode_steps
+        if threshold is None:
+            threshold = self.env.spec.reward_threshold
+        trial = 0
+        while trial <= trials:
+            done = False
             current_state = self.observation_process(
                 deepcopy(self.env.reset()))
             total_rewards = 0
-            for step in range(trial_size):
+            step = 0
+            while not done:
+            # for step in range(trial_size):
                 if render:
                     self.env.render()
                 action = self.action(current_state)
                 next_state, reward, done, _ = self.execute_action(action)
+                self.remember(current_state, action, reward, next_state, done)
                 self.replay(reward)
                 current_state = next_state
                 total_rewards += reward
+                step+=1
                 if done:
-                    self.execute_action(self.action(current_state))
-                    self.replay(0.)
+                    # self.execute_action(self.action(current_state))
+                    # self.replay(0.)
                     break
             self.total_rewards_list.append(total_rewards)
+            trial+=1
             if step >= self.env.spec.max_episode_steps - 1:
                 print("Failed to complete in trial {}".format(
                     trial), total_rewards)
@@ -74,12 +86,125 @@ class Agent():
                 print("Completed in {} trials".format(trial), total_rewards)
             if trial % 100 == 0:
                 self.save_models(model_name)
-            if solve_condition(self.total_rewards_list, trial, min_trials):
+            if solve_condition(self.total_rewards_list, trial, min_trials, threshold):
                 print("Solved in {} trials".format(trial), total_rewards)
                 break
         self.save_models(model_name)
 
     def test(self, trials=5, trial_size=250, render=False):
+        for t in range(trials):
+            current_state = self.observation_process(
+                deepcopy(self.env.reset()))
+            total_rewards = 0
+            for _ in range(trial_size):
+                if render:
+                    self.env.render()
+                action = self.action(current_state)
+                current_state, reward, done, _ = self.execute_action(action)
+                total_rewards += reward
+                if done:
+                    print(t + 1, total_rewards)
+                    break
+
+
+
+class MultistepAgent(Agent):
+    def __init__(self, env, model_factory, input_shape=None, batch_states_process=None, observation_process=None, reward_process=None, memory_size=10000,
+                n_step=4, gamma=.99):
+        assert n_step > 0
+        self.n_step = n_step
+        self.gamma = gamma
+        self.multistep_buffer = []
+        super().__init__(env, model_factory, input_shape, batch_states_process,
+                         observation_process, reward_process, memory_size)
+
+    def load_model(self, path="success.model"):
+        raise NotImplementedError()
+
+    def action(self, state):
+        """Selection d'action"""
+        raise NotImplementedError()
+
+    def replay(self, reward):
+        raise NotImplementedError()
+
+    def save_models(self, model_name_prefix):
+        raise NotImplementedError()
+
+    def remember(self, state, action, reward, new_state, done):
+        self.multistep_buffer.push([state, action, reward, new_state, done])
+        if len(self.multistep_buffer) < self.n_step:
+            return
+        
+        reward = sum([self.multistep_buffer[i][2]*(self.gamma**i) for i in range(self.nsteps)])
+        state, action, _, _ = self.multistep_buffer.pop(0)
+
+        self.memory.append([state, action, reward, new_state, done])
+
+    def multistep_reset(self):
+        while len(self.multistep_buffer) > 0:
+            reward = sum([self.multistep_buffer[i][2]*(self.gamma**i) for i in range(len(self.nstep_buffer))])
+            state, action, _, _ = self.multistep_buffer.pop(0)
+
+            self.memory.push([state, action, reward, None, done])
+
+
+    def execute_action(self, action):
+        next_state, reward, done, info = self.env.step(action)
+        next_state = self.observation_process(deepcopy(next_state))
+        if self.reward_process is not None:
+            reward = self.reward_process(reward)
+        return next_state, reward, done, info
+
+    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", wait_steps=1000, min_trials=100, render=False,
+              solve_condition=lambda total_rewards_list, trial, min_trials, threshold: trial >= 100 and sum(total_rewards_list)/len(total_rewards_list) >= threshold):
+        self.total_rewards_list = deque(maxlen=min_trials)
+        if trial_size is None:
+            trial_size = self.env.spec.max_episode_steps
+        if threshold is None:
+            threshold = self.env.spec.reward_threshold
+        trial = 0
+        total_steps = 0
+        try:
+            while trial <= trials:
+                current_state = self.observation_process(
+                    deepcopy(self.env.reset()))
+                total_rewards = 0
+                self.multistep_buffer = []
+                for step in range(trial_size):
+                    total_steps+=1
+                    if render:
+                        self.env.render()
+                    action = self.action(current_state)
+                    next_state, reward, done, _ = self.execute_action(action)
+                    self.remember(current_state, action, reward, next_state, done)
+                    if wait_steps >= total_steps:
+                        self.replay(reward)
+                    current_state = next_state
+                    total_rewards += reward
+                    if done:
+                        self.multistep_reset()
+                        break
+                self.total_rewards_list.append(total_rewards)
+                trial+=1
+                if step >= self.env.spec.max_episode_steps - 1:
+                    print("Failed to complete in trial {}".format(
+                        trial), total_rewards)
+                else:
+                    print("Completed in {} trials".format(trial), total_rewards)
+                if trial % 100 == 0:
+                    self.save_models(model_name)
+                if solve_condition(self.total_rewards_list, trial, min_trials, threshold):
+                    print("Solved in {} trials".format(trial), total_rewards)
+                    break
+                
+        except KeyboardInterrupt as ki:
+            print(ki)
+        self.save_models(model_name)
+
+    def test(self, trials=5, trial_size=None, render=False):
+        if trial_size is None:
+            trial_size = self.env.spec.max_episode_steps
         for t in range(trials):
             current_state = self.observation_process(
                 deepcopy(self.env.reset()))
