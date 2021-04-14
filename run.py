@@ -1,13 +1,14 @@
 import gym
 import argparse
 from projet.models import create_atari_model, batch_states_process_atari, observation_process_atari,\
-     reward_process_atari, create_mountain_cart_model, batch_states_process_mountain_cart, observation_process_mountain_cart, reward_process_mountain_cart,\
-     create_cart_pole_model, batch_states_process_cart_pole, observation_process_cart_pole, reward_process_cart_pole
+    reward_process_atari, create_mountain_cart_model, batch_states_process_mountain_cart, observation_process_mountain_cart, reward_process_mountain_cart,\
+    create_cart_pole_model, batch_states_process_cart_pole, observation_process_cart_pole, reward_process_cart_pole
 from projet.dqn import DQN
 from projet.ddqn import DDQN
 from projet.multistepDQN import MultistepDQN
 from projet.distDQN import DistDQN
 from projet.nDQN import NDQN
+from projet.pddqn import PDDQN
 # from ddqn import DDQN
 
 
@@ -20,7 +21,7 @@ def main():
     parser.add_argument('-m', '--model-name', type=str,
                         dest="model_name", default="default")
     parser.add_argument('-a', '--agent', type=str, choices=[
-                        "dqn", "ddqn", "multistepdqn", "distdqn", "ndqn"], default="dqn", dest="agent")
+                        "dqn", "ddqn", "multistepdqn", "distdqn", "ndqn", "pddqn"], default="dqn", dest="agent")
     parser.add_argument('-r', '--render', dest='render', action='store_true')
     parser.add_argument('--no-render', dest='render', action='store_false')
     parser.set_defaults(train=True)
@@ -55,7 +56,7 @@ def main():
     env = gym.make(env_name)
 
     agent_choices = {
-        "dqn": DQN, "ddqn": DDQN, "multistepdqn": MultistepDQN, "distdqn": DistDQN, "ndqn": NDQN
+        "dqn": DQN, "ddqn": DDQN, "multistepdqn": MultistepDQN, "distdqn": DistDQN, "ndqn": NDQN, "pddqn": PDDQN
     }
 
     dqn_agent = agent_choices[args.agent](env=env,
