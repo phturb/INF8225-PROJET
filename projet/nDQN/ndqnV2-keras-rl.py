@@ -1,22 +1,30 @@
 import numpy as np
+import gym
+
+import keras
+
+from rl.agents.dqn import DQNAgent
+from rl.policy import BoltzmannQPolicy
+from rl.memory import SequentialMemory
+from rl.core import Processor
+
 import tensorflow as tf
 from keras import Model
-from keras.layers import Layer, Input, Activation
+from keras.models import Sequential, load_model
+from keras.layers import Dense, Dropout, Input, Activation, Layer
 from keras.optimizers import Adam
+from keras.callbacks import TensorBoard
 
-from projet.dqn.dqnV3 import DQN
+from collections import deque
 
-class NDQN(DQN):
-    def __init__(self, env, model_factory, input_shape=None, batch_states_process=None, observation_process=None, reward_process=None, memory_size=10000,
-                 epsilon_decay=0.999, epsilon_min=0.10, gamma=0.89, trials=5000, batch_size=64, lr=0.001):
-        super().__init__(env, create_model_ndqn, input_shape, batch_states_process,
-                         observation_process, reward_process, memory_size,
-                         epsilon_decay, epsilon_min, gamma, trials, batch_size, lr)
+TRAIN = True
+TEST = False
 
 class NoisyDense(Layer):
     def __init__(self, units, input_dim, std_init=0.5, use_bias=True):
         super().__init__()
         self.units = units
+        self.input_dim = input_dim
         self.std_init = std_init
         self.use_bias = use_bias
         self.reset_noise(input_dim)
@@ -37,6 +45,11 @@ class NoisyDense(Layer):
             self.bias_sigma = tf.Variable(initial_value=sigma_initializer(shape=(units,), dtype='float32'),
                                         trainable=True)
 
+    def get_config(self):
+        config = {}
+        config.update({"units": self.units, "input_dim":self.input_dim, "std_init":self.std_init, "use_bias": self.use_bias})
+        return config
+
     def call(self, inputs):
         self.kernel = self.weight_mu + self.weight_sigma * self.weights_eps
         if self.use_bias:
@@ -54,7 +67,7 @@ class NoisyDense(Layer):
         if self.use_bias:
             self.bias_eps = eps_out
 
-def create_model_ndqn(input_shape, action_n):
+def create_model_ndqn(input_shape, action_n, lr):
         inputs = Input(shape=input_shape[0])
         x = NoisyDense(24, inputs.shape[1])(inputs)
         x = Activation('relu')(x)
@@ -66,3 +79,41 @@ def create_model_ndqn(input_shape, action_n):
         action = Activation('linear')(x)
         model = Model(inputs=inputs, outputs=action)
         return model
+
+class ProcessMountainCar(Processor):
+    def process_observation(self, observation):
+        return observation
+
+    def process_state_batch(self, batch):
+        return batch.reshape(-1, 2)
+
+
+ENV_NAME = 'MountainCar-v0'  # 'MountainCar-v0'
+env = gym.make(ENV_NAME)
+np.random.seed(123)
+env.seed(123)
+nb_actions = env.action_space.n
+lr = 0.005
+model = create_model_ndqn(env.observation_space.shape, nb_actions, lr)
+print(model.summary())
+
+
+# tb_log_dir = 'logs/tmp'
+# tb_callback = TensorBoard()
+memory = SequentialMemory(limit=2000, window_length=1)
+policy = BoltzmannQPolicy()
+dqn = DQNAgent(model=model, nb_actions=nb_actions, memory=memory, nb_steps_warmup=1600,
+               target_model_update=1e-2, processor=ProcessMountainCar(), custom_model_objects = {"NoisyDense":NoisyDense})
+optimizer = Adam(lr=lr, clipnorm=1.0)
+dqn.compile(optimizer, metrics=['mae'])
+if TRAIN:
+    dqn.fit(env, nb_steps=100000, visualize=True,
+            verbose=2)
+    dqn.save_weights('dqn_keras_rl_{}_weights.h5f'.format(
+        ENV_NAME), overwrite=True)
+if TEST:
+    dqn.load_weights('dqn_keras_rl_{}_weights.h5f'.format(
+        ENV_NAME))
+
+# Finally, evaluate our algorithm for 5 episodes.
+dqn.test(env, nb_episodes=5, visualize=True)
