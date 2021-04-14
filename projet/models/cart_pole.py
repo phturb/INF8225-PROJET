@@ -18,6 +18,18 @@ def create_cart_pole_model(input_shape, action_n):
     model = Model(inputs=inputs, outputs=action)
     return model
 
+def create_cart_pole_model_dist_DQN(input_shape, action_n, atom_n = 51):
+    inputs = Input(shape=4)
+    x = Dense(24)(inputs)
+    x = Activation('relu')(x)
+    x = Dense(64)(x)
+    x = Activation('relu')(x)
+    x = Dense(24)(x)
+    x = Activation('relu')(x)
+    outputs = [Dense(atom_n, activation='softmax')(x) for i in range(action_n)]
+    model = Model(inputs=inputs, outputs=outputs)
+    return model
+
 def batch_states_process_cart_pole(states):
     return np.array(states).reshape(-1, 4)
 
