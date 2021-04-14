@@ -4,6 +4,7 @@ from copy import deepcopy
 from keras.optimizers import Adam
 from keras.layers import Dense, Dropout, Input, Activation, Convolution2D, Flatten
 from keras.models import Sequential, load_model
+from keras.callbacks import Callback, CallbackList, History
 from keras import Model
 from PIL import Image
 import random
@@ -48,38 +49,74 @@ class Agent():
         #     reward = self.reward_process(reward)
         return next_state, reward, done, info
 
-    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", min_trials=100, render=False,
+    def get_model(self):
+        raise NotImplementedError()
+
+    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", min_trials=100, render=False, callbacks=None,
               solve_condition=lambda total_rewards_list, trial, min_trials, threshold: trial >= 100 and sum(total_rewards_list)/len(total_rewards_list) >= threshold):
+        callbacks = [] if not callbacks else callbacks[:]
+        history = History()
+        callbacks += [history]
+        callbacks = CallbackList(callbacks)
+        if hasattr(callbacks, 'set_model'):
+            callbacks.set_model(self.get_model())
+        else:
+            callbacks._set_model(self.get_model())
+        callbacks.on_train_begin()
+
         self.total_rewards_list = deque(maxlen=min_trials)
         if trial_size is None:
             trial_size = self.env.spec.max_episode_steps
         if threshold is None:
             threshold = self.env.spec.reward_threshold
         trial = 0
+        step = 0
         while trial <= trials:
+            total_rewards = 0
+            current_step = 0
+            callbacks.on_epoch_begin(trial)
             done = False
             current_state = self.observation_process(
                 deepcopy(self.env.reset()))
-            total_rewards = 0
-            step = 0
             while not done:
-            # for step in range(trial_size):
+                callbacks.on_batch_begin(current_step)
+
                 if render:
                     self.env.render()
+
+                # callbacks.on_action_begin(action)
+
                 action = self.action(current_state)
                 next_state, reward, done, _ = self.execute_action(action)
+
+                # callbacks.on_action_end(action)
+
                 self.remember(current_state, action, reward, next_state, done)
-                self.replay(reward)
+                metrics = self.replay(reward)
                 current_state = next_state
+                step_logs = {
+                    'action': action,
+                    'observation': current_state,
+                    'reward': reward,
+                    'metrics': metrics,
+                    'episode': trial,
+                }
+                callbacks.on_batch_end(current_step, step_logs)
                 total_rewards += reward
                 step+=1
+                current_step+=1
                 if done:
-                    # self.execute_action(self.action(current_state))
-                    # self.replay(0.)
+                    episode_logs = {
+                        'episode_reward': total_rewards,
+                        'nb_episode_steps': current_step,
+                        'nb_steps': step,
+                    }
+
                     break
+            callbacks.on_epoch_end(trial, episode_logs)
             self.total_rewards_list.append(total_rewards)
             trial+=1
-            if step >= self.env.spec.max_episode_steps - 1:
+            if current_step >= self.env.spec.max_episode_steps - 1:
                 print("Failed to complete in trial {}".format(
                     trial), total_rewards)
             else:
@@ -89,7 +126,10 @@ class Agent():
             if solve_condition(self.total_rewards_list, trial, min_trials, threshold):
                 print("Solved in {} trials".format(trial), total_rewards)
                 break
+        callbacks.on_train_end()
         self.save_models(model_name)
+        return history
+        
 
     def test(self, trials=5, trial_size=250, render=False):
         for t in range(trials):
@@ -118,19 +158,6 @@ class MultistepAgent(Agent):
         super().__init__(env, model_factory, input_shape, batch_states_process,
                          observation_process, reward_process, memory_size)
 
-    def load_model(self, path="success.model"):
-        raise NotImplementedError()
-
-    def action(self, state):
-        """Selection d'action"""
-        raise NotImplementedError()
-
-    def replay(self, reward):
-        raise NotImplementedError()
-
-    def save_models(self, model_name_prefix):
-        raise NotImplementedError()
-
     def remember(self, state, action, reward, new_state, done):
         self.multistep_buffer.push([state, action, reward, new_state, done])
         if len(self.multistep_buffer) < self.n_step:
@@ -156,51 +183,86 @@ class MultistepAgent(Agent):
             reward = self.reward_process(reward)
         return next_state, reward, done, info
 
-    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", wait_steps=1000, min_trials=100, render=False,
+    def train(self, trials=5000, trial_size=None, threshold=None, model_name="success.model", min_trials=100, render=False, callbacks=None,
               solve_condition=lambda total_rewards_list, trial, min_trials, threshold: trial >= 100 and sum(total_rewards_list)/len(total_rewards_list) >= threshold):
+        
+        callbacks = [] if not callbacks else callbacks[:]
+        history = History()
+        callbacks += [history]
+        callbacks = CallbackList(callbacks)
+        if hasattr(callbacks, 'set_model'):
+            callbacks.set_model(self.get_model())
+        else:
+            callbacks._set_model(self.get_model())
+        callbacks.on_train_begin()
+
         self.total_rewards_list = deque(maxlen=min_trials)
         if trial_size is None:
             trial_size = self.env.spec.max_episode_steps
         if threshold is None:
             threshold = self.env.spec.reward_threshold
         trial = 0
-        total_steps = 0
-        try:
-            while trial <= trials:
-                current_state = self.observation_process(
-                    deepcopy(self.env.reset()))
-                total_rewards = 0
-                self.multistep_buffer = []
-                for step in range(trial_size):
-                    total_steps+=1
-                    if render:
-                        self.env.render()
-                    action = self.action(current_state)
-                    next_state, reward, done, _ = self.execute_action(action)
-                    self.remember(current_state, action, reward, next_state, done)
-                    if wait_steps >= total_steps:
-                        self.replay(reward)
-                    current_state = next_state
-                    total_rewards += reward
-                    if done:
-                        self.multistep_reset()
-                        break
-                self.total_rewards_list.append(total_rewards)
-                trial+=1
-                if step >= self.env.spec.max_episode_steps - 1:
-                    print("Failed to complete in trial {}".format(
-                        trial), total_rewards)
-                else:
-                    print("Completed in {} trials".format(trial), total_rewards)
-                if trial % 100 == 0:
-                    self.save_models(model_name)
-                if solve_condition(self.total_rewards_list, trial, min_trials, threshold):
-                    print("Solved in {} trials".format(trial), total_rewards)
+        step = 0
+        while trial <= trials:
+            self.multistep_buffer = []
+            total_rewards = 0
+            current_step = 0
+            callbacks.on_epoch_begin(trial)
+            done = False
+            current_state = self.observation_process(
+                deepcopy(self.env.reset()))
+            while not done:
+            # for step in range(trial_size):
+                callbacks.on_batch_begin(current_step)
+
+                if render:
+                    self.env.render()
+
+                # callbacks.on_action_begin(action)
+
+                action = self.action(current_state)
+                next_state, reward, done, _ = self.execute_action(action)
+
+                # callbacks.on_action_end(action)
+
+                self.remember(current_state, action, reward, next_state, done)
+                metrics = self.replay(reward)
+                current_state = next_state
+                step_logs = {
+                    'action': action,
+                    'observation': current_state,
+                    'reward': reward,
+                    'metrics': metrics,
+                    'episode': trial,
+                }
+                callbacks.on_batch_end(current_step, step_logs)
+                total_rewards += reward
+                step+=1
+                current_step+=1
+                if done:
+                    self.multistep_reset()
+                    episode_logs = {
+                        'episode_reward': total_rewards,
+                        'nb_episode_steps': current_step,
+                        'nb_steps': step,
+                    }
                     break
-                
-        except KeyboardInterrupt as ki:
-            print(ki)
+            callbacks.on_epoch_end(trial, episode_logs)
+            self.total_rewards_list.append(total_rewards)
+            trial+=1
+            if current_step >= self.env.spec.max_episode_steps - 1:
+                print("Failed to complete in trial {}".format(
+                    trial), total_rewards)
+            else:
+                print("Completed in {} trials".format(trial), total_rewards)
+            if trial % 100 == 0:
+                self.save_models(model_name)
+            if solve_condition(self.total_rewards_list, trial, min_trials, threshold):
+                print("Solved in {} trials".format(trial), total_rewards)
+                break
+        callbacks.on_train_end()
         self.save_models(model_name)
+        return history
 
     def test(self, trials=5, trial_size=None, render=False):
         if trial_size is None:

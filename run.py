@@ -9,6 +9,7 @@ from projet.multistepDQN import MultistepDQN
 from projet.distDQN import DistDQN
 from projet.nDQN import NDQN
 from projet.pddqn import PDDQN
+from keras.callbacks import TensorBoard
 # from ddqn import DDQN
 
 
@@ -65,9 +66,11 @@ def main():
                                           observation_process=observation_process,
                                           reward_process=reward_process,
                                           input_shape=input_shape)
+    
+    tb = TensorBoard(f'./logs/{args.agent}', update_freq=1)
 
     if args.train:
-        dqn_agent.train(render=args.render)
+        dqn_agent.train(render=args.render, callbacks=[tb])
     else:
         dqn_agent.load_model(args.model_name)
     dqn_agent.test(render=args.render)

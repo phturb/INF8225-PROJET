@@ -82,8 +82,9 @@ class DQN(Agent):
         for _, (target, R, action, d, q_t) in enumerate(zip(targets, rewards, actions, dones, Q_targets)):
             target[action] = R + q_t
         # print(target)
-        self.model.train_on_batch(states, targets)
+        loss = self.model.train_on_batch(states, targets)
         self.target_update()
+        return loss
 
     def target_update(self):
         weights = self.model.get_weights()
@@ -103,3 +104,7 @@ class DQN(Agent):
         self.target_model.compile(loss="mean_squared_error", optimizer=Adam(
             lr=self.learning_rate))
         self.target_update()
+
+
+    def get_model(self):
+        return self.model

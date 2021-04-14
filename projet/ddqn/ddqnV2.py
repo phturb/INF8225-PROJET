@@ -117,3 +117,7 @@ class DDQN(Agent):
         self.target_model.compile(loss="mean_squared_error", optimizer=Adam(
             lr=self.learning_rate, epsilon=1.5*10e-4, clipnorm=1.0))
         self.target_update()
+
+
+    def get_model(self):
+        return self.model
