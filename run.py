@@ -1,7 +1,7 @@
 import gym
 import argparse
 from projet.models import create_atari_model, batch_states_process_atari, observation_process_atari,\
-    reward_process_atari, create_mountain_cart_model, batch_states_process_mountain_cart, observation_process_mountain_cart, reward_process_mountain_cart,\
+    reward_process_atari, create_mountain_cart_model, create_cart_pole_model_dist_DQN, batch_states_process_mountain_cart, observation_process_mountain_cart, reward_process_mountain_cart,\
     create_cart_pole_model, batch_states_process_cart_pole, observation_process_cart_pole, reward_process_cart_pole
 from projet.dqn import DQN
 from projet.ddqn import DDQN
@@ -41,7 +41,7 @@ def main():
         reward_process = reward_process_atari
         input_shape = (84, 84, 1)
     elif args.env_name == "cart-pole":
-        model_factory = create_cart_pole_model
+        model_factory = create_cart_pole_model_dist_DQN if args.agent == "distdqn" else create_cart_pole_model
         batch_states_process = batch_states_process_cart_pole
         observation_process = observation_process_cart_pole
         reward_process = reward_process_cart_pole
