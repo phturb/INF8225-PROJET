@@ -305,7 +305,7 @@ class Rainbow():
 import gym
 
 env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=True, dueling_enabled=True, noisy_net_enabled=True)
+rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=False, noisy_net_enabled=False)
 
 
 # callbacks = [TensorBoard(log_dir="./logs/rainbow", histogram_freq=1)]
