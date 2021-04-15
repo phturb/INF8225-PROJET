@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import tensorflow as tf
 
 from copy import deepcopy
 from collections import deque
@@ -75,7 +76,7 @@ class Rainbow():
             epsilon_min=0.1,
             epsilon_decay=0.995,
             gamma=0.99, 
-            lr=0.0000625,
+            lr=0.0005, # lr=0.0000625,
             tau=0.8,
             dd_enabled=False,
             dueling_enabled=False, 
@@ -247,7 +248,7 @@ class Rainbow():
 import gym
 
 env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory())
+rain = Rainbow(env, memory=DefaultMemory(), noisy_net_enabled=False)
 
 
 # n_step > 1 activate multistep
