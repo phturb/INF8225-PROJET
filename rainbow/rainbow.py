@@ -1,12 +1,12 @@
 import numpy as np
 import random
 import tensorflow as tf
-
+import keras.backend as K
 
 from copy import deepcopy
 from collections import deque
 
-from keras.layers import Input, Dense, Layer, Activation
+from keras.layers import Input, Dense, Layer, Activation, Lambda
 from keras.models import Model
 from keras.losses import MeanSquaredError
 from keras.optimizers import Adam
@@ -80,7 +80,7 @@ class Rainbow():
             epsilon_decay=0.995,
             gamma=0.99, 
             lr=0.0005, # lr=0.0000625,
-            tau=0.8,
+            tau=1,
             dd_enabled=False,
             dueling_enabled=False, 
             noisy_net_theta=0.5, noisy_net_enabled=False,
@@ -122,18 +122,16 @@ class Rainbow():
     def init_models(self):
         self.q_model = self.create_model(self.state_dim, self.action_dim)
         self.q_model.compile(loss=self.crit, optimizer=self.opt)
+        self.q_model.summary()
         self.q_target_model = self.create_model(self.state_dim, self.action_dim)
         self.update_model()
 
     def update_model(self):
         q_weights = self.q_model.get_weights()
-        if self.dd_enabled:
-            q_target_weights = self.q_target_model.get_weights()
-            for i in range(len(q_target_weights)):
-                q_target_weights[i] = self.tau * q_weights[i] + \
-                    (1 - self.tau) * q_target_weights[i]
-        else:
-            q_target_weights = q_weights
+        q_target_weights = self.q_target_model.get_weights()
+        for i in range(len(q_target_weights)):
+            q_target_weights[i] = self.tau * q_weights[i] + \
+                (1 - self.tau) * q_target_weights[i]
         self.q_target_model.set_weights(q_target_weights)
 
     def create_model(self, input_shape, output_shape):
@@ -145,16 +143,25 @@ class Rainbow():
             # Noisy Net
             x = NoisyDense(output_shape, x.shape[1])(x)
             action = Activation('linear')(x)
-        elif self.categorical_enabled:
-            # Categorical (Distributional)
-            action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
-        elif self.noisy_net_enabled and self.categorical_enabled:
-            # Categorical (Distributional) + Noisy Net
-            outputs = []
-            for _ in range(output_shape):
-                x_temp = NoisyDense(self.atoms, x.shape[1])(x)
-                outputs.append(Activation('softmax')(x_temp))
-            action = outputs
+        elif self.dueling_enabled:
+            # Dueling
+            x = Dense(output_shape + 1, activation='linear')(x)
+            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+        elif self.noisy_net_enabled and self.dueling_enabled:
+            # Dueling + Noisy Net
+            x = NoisyDense(output_shape + 1, x.shape[1])(x)
+            x = Activation('linear')(x)
+            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+        # elif self.categorical_enabled:
+        #     # Categorical (Distributional)
+        #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
+        # elif self.noisy_net_enabled and self.categorical_enabled:
+        #     # Categorical (Distributional) + Noisy Net
+        #     outputs = []
+        #     for _ in range(output_shape):
+        #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
+        #         outputs.append(Activation('softmax')(x_temp))
+        #     action = outputs
         else:    
             # Default DQN
             action = Dense(output_shape, activation='linear')(x)
@@ -177,7 +184,6 @@ class Rainbow():
         if samples is None:
             return None
         states, actions, rewards, new_states, dones = samples
-
         targets = self.q_model.predict_on_batch(states)
         if self.dd_enabled:
             keep_actions = np.argmax(targets, axis=1)
@@ -188,7 +194,6 @@ class Rainbow():
             Q_target = np.max(Q_target, axis=1).flatten()           
 
         Q_target = Q_target * self.gamma
-        
         for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
             if d:
                 target[action] = r
@@ -300,7 +305,7 @@ class Rainbow():
 import gym
 
 env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=True)
+rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=True, dueling_enabled=True, noisy_net_enabled=True)
 
 
 # callbacks = [TensorBoard(log_dir="./logs/rainbow", histogram_freq=1)]
