@@ -3,10 +3,11 @@ import random
 import tensorflow as tf
 import keras.backend as K
 
+from PIL import Image
 from copy import deepcopy
 from collections import deque
 
-from keras.layers import Input, Dense, Layer, Activation, Lambda
+from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten
 from keras.models import Model
 from keras.losses import MeanSquaredError
 from keras.optimizers import Adam
@@ -72,6 +73,14 @@ class NoisyDense(Layer):
         if self.use_bias:
             self.bias_eps = eps_out
 
+def atari_state_processor(state):
+    INPUT_SHAPE = (84, 84)
+    img = Image.fromarray(state)
+    img = img.resize(INPUT_SHAPE).convert(
+        'L')  # resize and convert to grayscale
+    processed_state = np.array(img) / 255
+    return processed_state.reshape(1, 84, 84)
+
 class Rainbow():
     def __init__(self,
             env,
@@ -81,6 +90,7 @@ class Rainbow():
             gamma=0.99, 
             lr=0.0005, # lr=0.0000625,
             tau=1,
+            is_atari=False,
             dd_enabled=False,
             dueling_enabled=False, 
             noisy_net_theta=0.5, noisy_net_enabled=False,
@@ -90,7 +100,13 @@ class Rainbow():
         self.memory = memory
         if self.memory is None:
             self.memory = DefaultMemory()
-        self.state_dim = env.observation_space.shape[0]
+
+        self.is_atari = is_atari
+        if self.is_atari:
+            self.state_dim = (84, 84, 1)
+        else:
+            self.state_dim = env.observation_space.shape[0]
+
         self.action_dim = env.action_space.n
         self.epsilon = 1.0
         self.epsilon_min = epsilon_min
@@ -135,45 +151,87 @@ class Rainbow():
         self.q_target_model.set_weights(q_target_weights)
 
     def create_model(self, input_shape, output_shape):
-        inputs = Input((input_shape,))
-        if self.noisy_net_enabled:
-            x = NoisyDense(24, x.shape[1])(inputs)
+        
+        if self.is_atari:
+            inputs = Input(input_shape)
+            x = Convolution2D(16, (8, 8), strides=(4, 4))(inputs)
             x = Activation('relu')(x)
-            x = NoisyDense(64, x.shape[1])(x)
+            x = Convolution2D(32, (4, 4), strides=(2, 2))(x)
             x = Activation('relu')(x)
-            x = NoisyDense(24, x.shape[1])(x)
-            x = Activation('relu')(x)
-        else:
-            x = Dense(24, activation='relu')(inputs)
-            x = Dense(64, activation='relu')(x)
-            x = Dense(24, activation='relu')(x)
+            x = Flatten()(x)
+            if self.noisy_net_enabled:
+                x = NoisyDense(256, x.shape[1])(x)
+                x = Activation('relu')(x)
+            else:
+                x = Dense(256, activation='relu')(x)
 
-        if self.noisy_net_enabled:
-            # Noisy Net
-            x = NoisyDense(output_shape, x.shape[1])(x)
-            action = Activation('linear')(x)
-        elif self.dueling_enabled:
-            # Dueling
-            x = Dense(output_shape + 1, activation='linear')(x)
-            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-        elif self.noisy_net_enabled and self.dueling_enabled:
-            # Dueling + Noisy Net
-            x = NoisyDense(output_shape + 1, x.shape[1])(x)
-            x = Activation('linear')(x)
-            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-        # elif self.categorical_enabled:
-        #     # Categorical (Distributional)
-        #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
-        # elif self.noisy_net_enabled and self.categorical_enabled:
-        #     # Categorical (Distributional) + Noisy Net
-        #     outputs = []
-        #     for _ in range(output_shape):
-        #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
-        #         outputs.append(Activation('softmax')(x_temp))
-        #     action = outputs
-        else:    
-            # Default DQN
-            action = Dense(output_shape, activation='linear')(x)
+            if self.noisy_net_enabled:
+                # Noisy Net
+                x = NoisyDense(output_shape, x.shape[1])(x)
+                action = Activation('linear')(x)
+            elif self.dueling_enabled:
+                # Dueling
+                x = Dense(output_shape + 1, activation='linear')(x)
+                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            elif self.noisy_net_enabled and self.dueling_enabled:
+                # Dueling + Noisy Net
+                x = NoisyDense(output_shape + 1, x.shape[1])(x)
+                x = Activation('linear')(x)
+                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            # elif self.categorical_enabled:
+            #     # Categorical (Distributional)
+            #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
+            # elif self.noisy_net_enabled and self.categorical_enabled:
+            #     # Categorical (Distributional) + Noisy Net
+            #     outputs = []
+            #     for _ in range(output_shape):
+            #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
+            #         outputs.append(Activation('softmax')(x_temp))
+            #     action = outputs
+            else:    
+                # Default DQN
+                action = Dense(output_shape, activation='linear')(x)
+
+        else:
+            inputs = Input((input_shape,))
+            if self.noisy_net_enabled:
+                x = NoisyDense(24, x.shape[1])(inputs)
+                x = Activation('relu')(x)
+                x = NoisyDense(64, x.shape[1])(x)
+                x = Activation('relu')(x)
+                x = NoisyDense(24, x.shape[1])(x)
+                x = Activation('relu')(x)
+            else:
+                x = Dense(24, activation='relu')(inputs)
+                x = Dense(64, activation='relu')(x)
+                x = Dense(24, activation='relu')(x)
+
+            if self.noisy_net_enabled:
+                # Noisy Net
+                x = NoisyDense(output_shape, x.shape[1])(x)
+                action = Activation('linear')(x)
+            elif self.dueling_enabled:
+                # Dueling
+                x = Dense(output_shape + 1, activation='linear')(x)
+                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            elif self.noisy_net_enabled and self.dueling_enabled:
+                # Dueling + Noisy Net
+                x = NoisyDense(output_shape + 1, x.shape[1])(x)
+                x = Activation('linear')(x)
+                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            # elif self.categorical_enabled:
+            #     # Categorical (Distributional)
+            #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
+            # elif self.noisy_net_enabled and self.categorical_enabled:
+            #     # Categorical (Distributional) + Noisy Net
+            #     outputs = []
+            #     for _ in range(output_shape):
+            #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
+            #         outputs.append(Activation('softmax')(x_temp))
+            #     action = outputs
+            else:    
+                # Default DQN
+                action = Dense(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
 
     def action(self, state, testing=False):
@@ -185,7 +243,11 @@ class Rainbow():
             return self.predict_action(state)
 
     def predict_action(self, state):
-        q = self.q_model.predict(np.reshape(state, [1, self.state_dim]))
+        if self.is_atari:
+            print(state.shape)
+            q = self.q_model.predict(state)
+        else:
+            q = self.q_model.predict(np.reshape(state, [1, self.state_dim]))
         return np.argmax(q[0])
 
     def replay(self, batch_size):
@@ -257,6 +319,9 @@ class Rainbow():
             while not done:
                 callbacks.on_batch_begin(trial_steps)
 
+                if self.is_atari:
+                    current_state = atari_state_processor(current_state)
+
                 if render:
                     self.env.render()
 
@@ -313,11 +378,12 @@ class Rainbow():
 
 import gym
 
-env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=False, noisy_net_enabled=False)
+# env = gym.make("CartPole-v1")
+# rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=True, noisy_net_enabled=False)
+env = gym.make("Pong-v0")
+rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=True, noisy_net_enabled=False, is_atari=True)
 
-
-# callbacks = [TensorBoard(log_dir="./logs/rainbow", histogram_freq=1)]
+# callbacks = [TensorBoard(log_dir="./logs/rainbow/dueling", histogram_freq=1)]
 callbacks = None
 # n_step > 1 activate multistep
-rain.train(render=True, n_step=1, callbacks=callbacks)
+rain.train(render=True, n_step=3, callbacks=callbacks)
