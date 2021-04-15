@@ -1,3 +1,4 @@
+import gym
 import numpy as np
 import random
 import tensorflow as tf
@@ -17,12 +18,13 @@ class DefaultMemory():
     def __init__(self, max_size=10000):
         self.max_size = max_size
         self.memory = deque(maxlen=self.max_size)
-    
+
     def sample(self, sample_size):
         if len(self.memory) < sample_size:
             return None
         samples = random.sample(self.memory, sample_size)
-        states, actions, rewards, new_states, dones = map(np.asarray, zip(*samples))
+        states, actions, rewards, new_states, dones = map(
+            np.asarray, zip(*samples))
         return states, actions, rewards, new_states, dones
 
     def append(self, state, action, reward, new_state, done):
@@ -30,6 +32,127 @@ class DefaultMemory():
 
     def size(self):
         return len(self.memory)
+
+
+class SumTree:
+    write = 0
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity - 1)
+        self.data = np.zeros(capacity, dtype=object)
+        self.n_entries = 0
+
+    # update to the root node
+    def _propagate(self, idx, change):
+        parent = (idx - 1) // 2
+
+        self.tree[parent] += change
+
+        if parent != 0:
+            self._propagate(parent, change)
+
+    # find sample on leaf node
+    def _retrieve(self, idx, s):
+        left = 2 * idx + 1
+        right = left + 1
+
+        if left >= len(self.tree):
+            return idx
+
+        if s <= self.tree[left]:
+            return self._retrieve(left, s)
+        else:
+            return self._retrieve(right, s - self.tree[left])
+
+    def total(self):
+        return self.tree[0]
+
+    # store priority and sample
+    def add(self, p, data):
+        idx = self.write + self.capacity - 1
+
+        self.data[self.write] = data
+        self.update(idx, p)
+
+        self.write += 1
+        if self.write >= self.capacity:
+            self.write = 0
+
+        if self.n_entries < self.capacity:
+            self.n_entries += 1
+
+    # update priority
+    def update(self, idx, p):
+        change = p - self.tree[idx]
+
+        self.tree[idx] = p
+        self._propagate(idx, change)
+
+    # get priority and sample
+    def get(self, s):
+        idx = self._retrieve(0, s)
+        dataIdx = idx - self.capacity + 1
+
+        return (idx, self.tree[idx], self.data[dataIdx])
+
+
+class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
+    e = 0.01
+    a = 0.6
+    beta = 0.4
+    beta_increment_per_sampling = 0.001
+
+    def __init__(self, capacity=10000):
+        self.tree = SumTree(capacity)
+        self.capacity = capacity
+
+    def _get_priority(self, error):
+        return (np.abs(error) + self.e) ** self.a
+
+    def append(self, state, action, reward, new_state, done):
+        p = np.max(self.tree.tree[-self.tree.capacity:])
+        p = p if p != 0 else 1
+        self.tree.add(p, (state, action, reward, new_state, done))
+
+    def sample(self, n):
+        if self.size() < n:
+            return None
+
+        batch = []
+        idxs = []
+        segment = self.tree.total() / n
+        priorities = []
+
+        self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])
+
+        for i in range(n):
+            a = segment * i
+            b = segment * (i + 1)
+
+            s = random.uniform(a, b)
+            (idx, p, data) = self.tree.get(s)
+            priorities.append(p)
+            batch.append(data)
+            idxs.append(idx)
+
+        sampling_probabilities = priorities / self.tree.total()
+        is_weight = np.power(self.tree.n_entries *
+                             sampling_probabilities, -self.beta)
+        is_weight /= is_weight.max()
+
+        states, actions, rewards, new_states, dones = map(
+            np.asarray, zip(*batch))
+
+        return states, actions, rewards, new_states, dones, idxs, is_weight
+
+    def update(self, idx, error):
+        p = self._get_priority(error)
+        self.tree.update(idx, p)
+
+    def size(self):
+        return self.tree.n_entries
+
 
 class NoisyDense(Layer):
     def __init__(self, units, input_dim, std_init=0.5, use_bias=True):
@@ -41,7 +164,8 @@ class NoisyDense(Layer):
 
         mu_range = 1 / np.sqrt(input_dim)
         mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range)
-        sigma_initializer = tf.constant_initializer(self.std_init / np.sqrt(self.units))
+        sigma_initializer = tf.constant_initializer(
+            self.std_init / np.sqrt(self.units))
 
         self.weight_mu = tf.Variable(initial_value=mu_initializer(shape=(input_dim, units), dtype='float32'),
                                      trainable=True)
@@ -50,10 +174,10 @@ class NoisyDense(Layer):
                                         trainable=True)
         if self.use_bias:
             self.bias_mu = tf.Variable(initial_value=mu_initializer(shape=(units,), dtype='float32'),
-                                        trainable=True)
+                                       trainable=True)
 
             self.bias_sigma = tf.Variable(initial_value=sigma_initializer(shape=(units,), dtype='float32'),
-                                        trainable=True)
+                                          trainable=True)
 
     def call(self, inputs):
         self.kernel = self.weight_mu + self.weight_sigma * self.weights_eps
@@ -72,24 +196,22 @@ class NoisyDense(Layer):
         if self.use_bias:
             self.bias_eps = eps_out
 
+
 class Rainbow():
     def __init__(self,
-            env,
-            memory=None,
-            epsilon_min=0.1,
-            epsilon_decay=0.995,
-            gamma=0.99, 
-            lr=0.0005, # lr=0.0000625,
-            tau=1,
-            dd_enabled=False,
-            dueling_enabled=False, 
-            noisy_net_theta=0.5, noisy_net_enabled=False,
-            prioritization_w=0.5, prioritized_memory_enabled=False,
-            atoms=51, v_min=-10, v_max=10, categorical_enabled=False):
+                 env,
+                 epsilon_min=0.1,
+                 epsilon_decay=0.995,
+                 gamma=0.99,
+                 lr=0.0005,  # lr=0.0000625,
+                 tau=1,
+                 dd_enabled=False,
+                 dueling_enabled=False,
+                 noisy_net_theta=0.5, noisy_net_enabled=False,
+                 prioritization_w=0.5, prioritized_memory_enabled=False,
+                 atoms=51, v_min=-10, v_max=10, categorical_enabled=False):
         self.env = env
-        self.memory = memory
-        if self.memory is None:
-            self.memory = DefaultMemory()
+        self.memory = PrioritizedMemory() if prioritized_memory_enabled else DefaultMemory()
         self.state_dim = env.observation_space.shape[0]
         self.action_dim = env.action_space.n
         self.epsilon = 1.0
@@ -123,7 +245,8 @@ class Rainbow():
         self.q_model = self.create_model(self.state_dim, self.action_dim)
         self.q_model.compile(loss=self.crit, optimizer=self.opt)
         self.q_model.summary()
-        self.q_target_model = self.create_model(self.state_dim, self.action_dim)
+        self.q_target_model = self.create_model(
+            self.state_dim, self.action_dim)
         self.update_model()
 
     def update_model(self):
@@ -155,12 +278,14 @@ class Rainbow():
         elif self.dueling_enabled:
             # Dueling
             x = Dense(output_shape + 1, activation='linear')(x)
-            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(
+                a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
         elif self.noisy_net_enabled and self.dueling_enabled:
             # Dueling + Noisy Net
             x = NoisyDense(output_shape + 1, x.shape[1])(x)
             x = Activation('linear')(x)
-            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
+            action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(
+                a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
         # elif self.categorical_enabled:
         #     # Categorical (Distributional)
         #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
@@ -171,7 +296,7 @@ class Rainbow():
         #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
         #         outputs.append(Activation('softmax')(x_temp))
         #     action = outputs
-        else:    
+        else:
             # Default DQN
             action = Dense(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
@@ -192,15 +317,21 @@ class Rainbow():
         samples = self.memory.sample(batch_size)
         if samples is None:
             return None
-        states, actions, rewards, new_states, dones = samples
+        if self.prioritized_memory_enabled:
+            states, actions, rewards, new_states, dones, idxs, weights = samples
+        else:
+            states, actions, rewards, new_states, dones = samples
+
         targets = self.q_model.predict_on_batch(states)
+        if self.prioritized_memory_enabled:
+            old_targets = targets.copy()
         if self.dd_enabled:
             keep_actions = np.argmax(targets, axis=1)
             Q_target = self.q_target_model.predict_on_batch(new_states)
             Q_target = Q_target[range(batch_size), keep_actions]
         else:
             Q_target = self.q_target_model.predict_on_batch(new_states)
-            Q_target = np.max(Q_target, axis=1).flatten()           
+            Q_target = np.max(Q_target, axis=1).flatten()
 
         Q_target = Q_target * self.gamma
         for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
@@ -208,28 +339,37 @@ class Rainbow():
                 target[action] = r
             else:
                 target[action] = r + q_t
+
+        if self.prioritized_memory_enabled:
+            indices = np.arange(batch_size)
+            errors = np.abs(targets[indices, actions] -
+                            old_targets[indices, actions])
+            for i in range(batch_size):
+                self.memory.update(idxs[i], errors[i])
+
         return self.q_model.train_on_batch(states, targets)
 
     def remember(self, current_state, action, reward, next_state, done):
         if self.n_step > 1:
-             # Multistep
+            # Multistep
             self.multistep_buffer.append([current_state, action, reward, done])
             if len(self.multistep_buffer) < self.n_step:
                 return
-            reward = sum([self.multistep_buffer[i][2]*(self.gamma**i) for i in range(self.n_step)])
+            reward = sum([self.multistep_buffer[i][2]*(self.gamma**i)
+                         for i in range(self.n_step)])
             current_state, action, _, _ = self.multistep_buffer.pop(0)
-    
+
         self.memory.append(current_state, action, reward, next_state, done)
-    
+
     def multistep_reset(self):
         """ Multistep """
         if self.n_step <= 1:
             return
         while len(self.multistep_buffer) > 0:
-            reward = sum([self.multistep_buffer[i][2]*(self.gamma**i) for i in range(len(self.multistep_buffer))])
+            reward = sum([self.multistep_buffer[i][2]*(self.gamma**i)
+                         for i in range(len(self.multistep_buffer))])
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
-
 
     def train(self, max_trials=500, batch_size=32, warmup=0, model_update_delay=1, render=False, n_step=1, callbacks=None):
         callbacks = [] if not callbacks else callbacks[:]
@@ -281,7 +421,7 @@ class Rainbow():
                 callbacks.on_batch_end(trial_steps, step_logs)
                 trial_total_reward += reward
                 trial_steps += 1
-    
+
             episode_logs = {
                 'episode_reward': trial_total_reward,
                 'nb_episode_steps': trial_steps,
@@ -291,7 +431,7 @@ class Rainbow():
             self.multistep_reset()
 
             callbacks.on_epoch_end(trial, episode_logs)
-            total_trials_steps+=trial_steps
+            total_trials_steps += trial_steps
             print(f"Trial {trial} complete with reward : {trial_total_reward}")
         callbacks.on_train_end()
         return history
@@ -311,10 +451,9 @@ class Rainbow():
             print(f"Trial {trial} complete with reward : {trial_total_reward}")
 
 
-import gym
-
 env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=False, noisy_net_enabled=False)
+rain = Rainbow(env, dd_enabled=False, dueling_enabled=False,
+               noisy_net_enabled=False, prioritized_memory_enabled=False)
 
 
 # callbacks = [TensorBoard(log_dir="./logs/rainbow", histogram_freq=1)]
