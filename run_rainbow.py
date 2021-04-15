@@ -8,7 +8,7 @@ from keras.callbacks import TensorBoard
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--env", type=str, dest="env_name", default="cart-pole",
-                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole"])
+                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman"])
     parser.add_argument('-t', '--train', dest='train', action='store_true')
     parser.add_argument('--no-train', dest='train', action='store_false')
     parser.add_argument('-m', '--model-name', type=str,
@@ -36,9 +36,10 @@ def main():
         "mountain-car": "MountainCar-v0",
         "cart-pole": "CartPole-v1",
         "pong": "Pong-v0",
-        "brick-breaker": "Pong-v0"
+        "brick-breaker": "Breakout-v0",
+        "pacman": "MsPacman-v0"
     }
-    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker"    
+    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman"
 
     model_name = args.model_name
     model_ext = ""
@@ -73,7 +74,6 @@ def main():
         callbacks = None
     # n_step > 1 activate multistep
     
-
     if args.train:
         history = agent.train(render=args.render, max_trials=args.max_trials, n_step=args.n_step, callbacks=callbacks)
         agent.save_models()
