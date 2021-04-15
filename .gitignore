@@ -3,6 +3,8 @@ success.model/
 success.model
 success.model/*
 
+models/*
+
 logs/*
 
 # Byte-compiled / optimized / DLL files

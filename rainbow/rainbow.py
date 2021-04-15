@@ -9,7 +9,7 @@ from copy import deepcopy
 from collections import deque
 
 from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten
-from keras.models import Model
+from keras.models import Model, load_model
 from keras.losses import MeanSquaredError
 from keras.optimizers import Adam
 from keras.callbacks import History, CallbackList, TensorBoard
@@ -208,6 +208,7 @@ def atari_state_processor(state):
 class Rainbow():
     def __init__(self,
                  env,
+                 model_name="rainbow",
                  epsilon_min=0.1,
                  epsilon_decay=0.995,
                  gamma=0.99,
@@ -221,7 +222,7 @@ class Rainbow():
                  atoms=51, v_min=-10, v_max=10, categorical_enabled=False):
         self.env = env
         self.memory = PrioritizedMemory() if prioritized_memory_enabled else DefaultMemory()
-        self.state_dim = env.observation_space.shape[0]
+        self.model_name = model_name
         self.action_dim = env.action_space.n
         self.epsilon = 1.0
         self.epsilon_min = epsilon_min
@@ -272,6 +273,14 @@ class Rainbow():
                 (1 - self.tau) * q_target_weights[i]
         self.q_target_model.set_weights(q_target_weights)
 
+    def save_models(self):
+        self.q_model.save("./models/" + self.model_name +"/base")
+        self.q_target_model.save("./models/"+self.model_name +"/target")
+
+    def load_models(self):
+        self.q_model = load_model("./models/" +self.model_name +"/base")
+        self.q_target_model = load_model("./models/"+self.model_name +"/target")
+
     def create_model(self, input_shape, output_shape):
         
         if self.is_atari:
@@ -317,7 +326,7 @@ class Rainbow():
         else:
             inputs = Input((input_shape,))
             if self.noisy_net_enabled:
-                x = NoisyDense(24, x.shape[1])(inputs)
+                x = NoisyDense(24, input_shape)(inputs)
                 x = Activation('relu')(x)
                 x = NoisyDense(64, x.shape[1])(x)
                 x = Activation('relu')(x)
@@ -365,8 +374,7 @@ class Rainbow():
             return self.predict_action(state)
 
     def predict_action(self, state):
-        if self.is_atari:
-            print(state.shape)
+        if self.is_atari:   
             q = self.q_model.predict(state)
         else:
             q = self.q_model.predict(np.reshape(state, [1, self.state_dim]))
@@ -431,6 +439,8 @@ class Rainbow():
             self.memory.append(state, action, reward, state, True)
 
     def train(self, max_trials=500, batch_size=32, warmup=0, model_update_delay=1, render=False, n_step=1, callbacks=None):
+        assert n_step > 0
+
         callbacks = [] if not callbacks else callbacks[:]
         history = History()
         callbacks += [history]
@@ -498,7 +508,7 @@ class Rainbow():
         callbacks.on_train_end()
         return history
 
-    def test(self, trials=5, render=False):
+    def test(self, max_trials=5, render=False):
         self.n_step = 1
         for trial in range(max_trials):
             done = False
@@ -513,14 +523,15 @@ class Rainbow():
             print(f"Trial {trial} complete with reward : {trial_total_reward}")
 
 
-import gym
+if __name__ == "__main__":
+    import gym
 
-# env = gym.make("CartPole-v1")
-# rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=True, noisy_net_enabled=False)
-env = gym.make("Pong-v0")
-rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=False, noisy_net_enabled=False, prioritized_memory_enabled=False, is_atari=False)
+    env = gym.make("CartPole-v1")
+    # rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=False, dueling_enabled=True, noisy_net_enabled=False)
+    # env = gym.make("Pong-v0")
+    rain = Rainbow(env, dd_enabled=True, dueling_enabled=True, noisy_net_enabled=False, prioritized_memory_enabled=True, is_atari=False)
 
-# callbacks = [TensorBoard(log_dir="./logs/rainbow/dueling", histogram_freq=1)]
-callbacks = None
-# n_step > 1 activate multistep
-rain.train(render=True, n_step=1, callbacks=callbacks)
+    # callbacks = [TensorBoard(log_dir="./logs/rainbow/dueling", histogram_freq=1)]
+    callbacks = None
+    # n_step > 1 activate multistep
+    rain.train(render=True, n_step=4, callbacks=callbacks)
