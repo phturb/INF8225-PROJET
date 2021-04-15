@@ -2,6 +2,7 @@ import numpy as np
 import random
 import tensorflow as tf
 
+
 from copy import deepcopy
 from collections import deque
 
@@ -9,6 +10,8 @@ from keras.layers import Input, Dense, Layer, Activation
 from keras.models import Model
 from keras.losses import MeanSquaredError
 from keras.optimizers import Adam
+from keras.callbacks import History, CallbackList, TensorBoard
+
 
 class DefaultMemory():
     def __init__(self, max_size=10000):
@@ -126,7 +129,7 @@ class Rainbow():
         q_weights = self.q_model.get_weights()
         if self.dd_enabled:
             q_target_weights = self.q_target_model.get_weights()
-            for i in range(len(target_weights)):
+            for i in range(len(q_target_weights)):
                 q_target_weights[i] = self.tau * q_weights[i] + \
                     (1 - self.tau) * q_target_weights[i]
         else:
@@ -139,9 +142,21 @@ class Rainbow():
         x = Dense(64, activation='relu')(x)
         x = Dense(24, activation='relu')(x)
         if self.noisy_net_enabled:
-            action = NoisyDense(output_shape, x.shape[1])
-            action = Activation('linear')
+            # Noisy Net
+            x = NoisyDense(output_shape, x.shape[1])(x)
+            action = Activation('linear')(x)
+        elif self.categorical_enabled:
+            # Categorical (Distributional)
+            action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
+        elif self.noisy_net_enabled and self.categorical_enabled:
+            # Categorical (Distributional) + Noisy Net
+            outputs = []
+            for _ in range(output_shape):
+                x_temp = NoisyDense(self.atoms, x.shape[1])(x)
+                outputs.append(Activation('softmax')(x_temp))
+            action = outputs
         else:    
+            # Default DQN
             action = Dense(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
 
@@ -162,9 +177,16 @@ class Rainbow():
         if samples is None:
             return None
         states, actions, rewards, new_states, dones = samples
+
         targets = self.q_model.predict_on_batch(states)
-        Q_target = self.q_target_model.predict_on_batch(new_states)
-        Q_target = np.max(Q_target, axis=1).flatten()
+        if self.dd_enabled:
+            keep_actions = np.argmax(targets, axis=1)
+            Q_target = self.q_target_model.predict_on_batch(new_states)
+            Q_target = Q_target[range(batch_size), keep_actions]
+        else:
+            Q_target = self.q_target_model.predict_on_batch(new_states)
+            Q_target = np.max(Q_target, axis=1).flatten()           
+
         Q_target = Q_target * self.gamma
         
         for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
@@ -195,18 +217,31 @@ class Rainbow():
             self.memory.append(state, action, reward, state, True)
 
 
-    def train(self, max_trials=500, batch_size=32, warmup=0, model_update_delay=1, render=False, n_step=1):
+    def train(self, max_trials=500, batch_size=32, warmup=0, model_update_delay=1, render=False, n_step=1, callbacks=None):
+        callbacks = [] if not callbacks else callbacks[:]
+        history = History()
+        callbacks += [history]
+        callbacks = CallbackList(callbacks)
+        if hasattr(callbacks, 'set_model'):
+            callbacks.set_model(self.q_model)
+        else:
+            callbacks._set_model(self.q_model)
+
+        callbacks.on_train_begin()
+
         self.n_step = n_step
         if self.n_step > 1:
             self.multistep_buffer = []
         total_trials_steps = 0
         for trial in range(max_trials):
+            callbacks.on_epoch_begin(trial)
             done = False
             trial_total_reward = 0
             trial_steps = 0
 
             current_state = deepcopy(self.env.reset())
             while not done:
+                callbacks.on_batch_begin(trial_steps)
 
                 if render:
                     self.env.render()
@@ -216,19 +251,36 @@ class Rainbow():
                 self.remember(current_state, action, reward, next_state, done)
 
                 if warmup <= total_trials_steps:
-                    self.replay(batch_size)
+                    metrics = self.replay(batch_size)
 
                 if total_trials_steps % model_update_delay == 0:
                     self.update_model()
 
                 current_state = next_state
+                step_logs = {
+                    'action': action,
+                    'observation': current_state,
+                    'reward': reward,
+                    'metrics': metrics,
+                    'episode': trial,
+                }
+                callbacks.on_batch_end(trial_steps, step_logs)
                 trial_total_reward += reward
                 trial_steps += 1
     
+            episode_logs = {
+                'episode_reward': trial_total_reward,
+                'nb_episode_steps': trial_steps,
+                'nb_steps': total_trials_steps,
+            }
+
             self.multistep_reset()
 
+            callbacks.on_epoch_end(trial, episode_logs)
             total_trials_steps+=trial_steps
             print(f"Trial {trial} complete with reward : {trial_total_reward}")
+        callbacks.on_train_end()
+        return history
 
     def test(self, trials=5, render=False):
         self.n_step = 1
@@ -248,8 +300,10 @@ class Rainbow():
 import gym
 
 env = gym.make("CartPole-v1")
-rain = Rainbow(env, memory=DefaultMemory(), noisy_net_enabled=False)
+rain = Rainbow(env, memory=DefaultMemory(), dd_enabled=True)
 
 
+# callbacks = [TensorBoard(log_dir="./logs/rainbow", histogram_freq=1)]
+callbacks = None
 # n_step > 1 activate multistep
-rain.train(render=True, n_step=1)
+rain.train(render=True, n_step=1, callbacks=callbacks)
