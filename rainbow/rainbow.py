@@ -203,7 +203,8 @@ def atari_state_processor(state):
     img = img.resize(INPUT_SHAPE).convert(
         'L')  # resize and convert to grayscale
     processed_state = np.array(img) / 255
-    return processed_state.reshape(1, 84, 84)
+    processed_state = processed_state.reshape(1 ,84, 84, 1)
+    return processed_state
 
 class Rainbow():
     def __init__(self,
@@ -410,7 +411,16 @@ class Rainbow():
             states, actions, rewards, new_states, dones, idxs, weights = samples
         else:
             states, actions, rewards, new_states, dones = samples
-        
+
+        if self.is_atari:
+            # states = list(map(atari_state_processor, states))
+            # print(states)
+            # states = list(map(atari_state_processor, states))
+            # new_states = list(map(atari_state_processor, new_states))
+            # print(states)
+            new_states = np.reshape(new_states , (batch_size, 84, 84, 1))      
+            states = np.reshape(states , (batch_size, 84, 84, 1))        
+
         targets = self.q_model.predict_on_batch(states)
         if self.categorical_enabled:
             p = targets
@@ -429,6 +439,8 @@ class Rainbow():
                 keep_actions = Q_target * self.z
                 keep_actions = np.sum(keep_actions, axis=2)
                 keep_actions = np.argmax(keep_actions, axis=1)
+            else:
+                keep_actions = np.argmax(Q_target, axis=1)
             Q_target = Q_target[range(batch_size), keep_actions]
         if self.categorical_enabled:
             m = np.zeros((batch_size, self.action_dim, self.atoms))
@@ -512,17 +524,18 @@ class Rainbow():
             trial_steps = 0
 
             current_state = deepcopy(self.env.reset())
+            if self.is_atari:
+                current_state = atari_state_processor(current_state)
             while not done:
-                callbacks.on_batch_begin(trial_steps)
-
-                if self.is_atari:
-                    current_state = atari_state_processor(current_state)
+                callbacks.on_batch_begin(trial_steps)                   
 
                 if render:
                     self.env.render()
 
                 action = self.action(current_state)
                 next_state, reward, done, info = self.env.step(action)
+                if self.is_atari:
+                    next_state = atari_state_processor(next_state)
                 self.remember(current_state, action, reward, next_state, done)
 
                 if warmup <= total_trials_steps:
