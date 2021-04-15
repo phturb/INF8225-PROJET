@@ -136,9 +136,18 @@ class Rainbow():
 
     def create_model(self, input_shape, output_shape):
         inputs = Input((input_shape,))
-        x = Dense(24, activation='relu')(inputs)
-        x = Dense(64, activation='relu')(x)
-        x = Dense(24, activation='relu')(x)
+        if self.noisy_net_enabled:
+            x = NoisyDense(24, x.shape[1])(inputs)
+            x = Activation('relu')(x)
+            x = NoisyDense(64, x.shape[1])(x)
+            x = Activation('relu')(x)
+            x = NoisyDense(24, x.shape[1])(x)
+            x = Activation('relu')(x)
+        else:
+            x = Dense(24, activation='relu')(inputs)
+            x = Dense(64, activation='relu')(x)
+            x = Dense(24, activation='relu')(x)
+
         if self.noisy_net_enabled:
             # Noisy Net
             x = NoisyDense(output_shape, x.shape[1])(x)
