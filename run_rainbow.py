@@ -64,10 +64,11 @@ def main():
             dueling_enabled=args.dueling_enabled,
             noisy_net_enabled=args.noisy_net_enabled,
             prioritized_memory_enabled=args.prioritized_memory_enabled, 
+            categorical_enabled=args.categorical_enabled,
             is_atari=is_atari)
 
     if args.w_tensorboard:
-        callbacks = [TensorBoard(log_dir="./logs/rainbow/dueling", histogram_freq=1)]
+        callbacks = [TensorBoard(log_dir=f"./logs/rainbow/{model_name}", histogram_freq=1)]
     else:
         callbacks = None
     # n_step > 1 activate multistep

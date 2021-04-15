@@ -8,9 +8,9 @@ from PIL import Image
 from copy import deepcopy
 from collections import deque
 
-from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten
+from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten, Concatenate,Reshape 
 from keras.models import Model, load_model
-from keras.losses import MeanSquaredError
+from keras.losses import MeanSquaredError, CategoricalCrossentropy
 from keras.optimizers import Adam
 from keras.callbacks import History, CallbackList, TensorBoard
 
@@ -249,11 +249,18 @@ class Rainbow():
         self.prioritization_w = prioritization_w
         # Categorical
         self.categorical_enabled = categorical_enabled
+        assert atoms >= 1
+        assert v_min < v_max
         self.atoms = atoms
         self.v_min = v_min
         self.v_max = v_max
+        self.z_delta = (v_max - v_min) / (atoms - 1)
+        self.z = np.array([ (v_min + i*self.z_delta) for i in range(atoms)  ])
 
-        self.crit = MeanSquaredError()
+        if self.categorical_enabled:
+            self.crit = CategoricalCrossentropy()
+        else:
+            self.crit = MeanSquaredError()
         self.opt = Adam(learning_rate=self.lr)
         self.init_models()
 
@@ -295,34 +302,6 @@ class Rainbow():
                 x = Activation('relu')(x)
             else:
                 x = Dense(256, activation='relu')(x)
-
-            if self.noisy_net_enabled:
-                # Noisy Net
-                x = NoisyDense(output_shape, x.shape[1])(x)
-                action = Activation('linear')(x)
-            elif self.dueling_enabled:
-                # Dueling
-                x = Dense(output_shape + 1, activation='linear')(x)
-                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-            elif self.noisy_net_enabled and self.dueling_enabled:
-                # Dueling + Noisy Net
-                x = NoisyDense(output_shape + 1, x.shape[1])(x)
-                x = Activation('linear')(x)
-                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-            # elif self.categorical_enabled:
-            #     # Categorical (Distributional)
-            #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
-            # elif self.noisy_net_enabled and self.categorical_enabled:
-            #     # Categorical (Distributional) + Noisy Net
-            #     outputs = []
-            #     for _ in range(output_shape):
-            #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
-            #         outputs.append(Activation('softmax')(x_temp))
-            #     action = outputs
-            else:    
-                # Default DQN
-                action = Dense(output_shape, activation='linear')(x)
-
         else:
             inputs = Input((input_shape,))
             if self.noisy_net_enabled:
@@ -337,32 +316,71 @@ class Rainbow():
                 x = Dense(64, activation='relu')(x)
                 x = Dense(24, activation='relu')(x)
 
-            if self.noisy_net_enabled:
-                # Noisy Net
-                x = NoisyDense(output_shape, x.shape[1])(x)
-                action = Activation('linear')(x)
-            elif self.dueling_enabled:
-                # Dueling
-                x = Dense(output_shape + 1, activation='linear')(x)
-                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-            elif self.noisy_net_enabled and self.dueling_enabled:
-                # Dueling + Noisy Net
-                x = NoisyDense(output_shape + 1, x.shape[1])(x)
-                x = Activation('linear')(x)
-                action = Lambda(lambda a: K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True), output_shape=(output_shape,))(x)
-            # elif self.categorical_enabled:
-            #     # Categorical (Distributional)
-            #     action = [Dense(self.atoms, activation='softmax')(x) for i in range(output_shape)]
-            # elif self.noisy_net_enabled and self.categorical_enabled:
-            #     # Categorical (Distributional) + Noisy Net
-            #     outputs = []
-            #     for _ in range(output_shape):
-            #         x_temp = NoisyDense(self.atoms, x.shape[1])(x)
-            #         outputs.append(Activation('softmax')(x_temp))
-            #     action = outputs
-            else:    
-                # Default DQN
-                action = Dense(output_shape, activation='linear')(x)
+        if self.noisy_net_enabled and not self.dueling_enabled and not self.categorical_enabled:
+            # Noisy Net
+            print("Noisy Net")
+            x = NoisyDense(output_shape, x.shape[1])(x)
+            action = Activation('linear')(x)
+        elif not self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
+            # Dueling
+            print("Dueling")
+            x = Dense(output_shape + 1, activation='linear')(x)
+            def avg_duel(a):
+                return K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
+            action = Lambda(avg_duel, output_shape=(output_shape,))(x)
+        elif self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
+            # Dueling + Noisy Net
+            print(" Dueling + Noisy Net")
+            x = NoisyDense(output_shape + 1, x.shape[1])(x)
+            x = Activation('linear')(x)
+            def avg_duel(a):
+                return K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
+            action = Lambda(avg_duel, output_shape=(output_shape,))(x)
+        elif not self.noisy_net_enabled and not self.dueling_enabled and self.categorical_enabled:
+            # Categorical (Distributional)
+            print("Categorical")
+            outputs = [Dense(self.atoms, name=f"categorical_dense_{i}")(x) for i in range(output_shape)]
+            outputs = Concatenate()(outputs)
+            outputs = Reshape(( output_shape, self.atoms))(outputs)
+            action = Activation('softmax')(outputs)
+        elif self.noisy_net_enabled and not self.dueling_enabled and self.categorical_enabled:
+            # Categorical (Distributional) + Noisy Net
+            print("Categorical + Noisy Net")
+            outputs = []
+            for _ in range(output_shape):
+                outputs.append(NoisyDense(self.atoms, x.shape[1])(x))
+            outputs = Concatenate()(outputs)
+            outputs = Reshape(( output_shape, self.atoms))(outputs)
+            action = Activation('softmax')(outputs)
+        elif not self.noisy_net_enabled and self.dueling_enabled and self.categorical_enabled:
+             # Categorical (Distributional) + Dueling
+            print("Categorical + Dueling")
+            outputs = []
+            for i in range(output_shape + 1):
+                outputs.append(Dense(self.atoms, name=f"categorical_dense_{i}")(x))
+            outputs = Concatenate()(outputs)
+            outputs = Reshape(( output_shape + 1 , self.atoms))(outputs)
+            def avg_duel(a):
+                return K.expand_dims(a[:, 0], 0) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
+            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))(outputs)
+            action = Activation('softmax')(action)
+            
+            # action = outputs
+        elif self.noisy_net_enabled and self.dueling_enabled and self.categorical_enabled:
+             # Categorical (Distributional) + Noisy Net + Dueling
+            print("Categorical + Noisy Net + Dueling")
+            outputs = []
+            for _ in range(output_shape + 1):
+                outputs.append(NoisyDense(self.atoms, x.shape[1])(x))
+            outputs = Concatenate()(outputs)
+            outputs = Reshape(( output_shape + 1 , self.atoms))(outputs)
+            def avg_duel(a):
+                return K.expand_dims(a[:, 0], 0) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
+            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))(outputs)
+            action = Activation('softmax')(action)
+        else:    
+            # Default DQN
+            action = Dense(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
 
     def action(self, state, testing=False):
@@ -373,11 +391,15 @@ class Rainbow():
         else:
             return self.predict_action(state)
 
+
     def predict_action(self, state):
         if self.is_atari:   
             q = self.q_model.predict(state)
         else:
             q = self.q_model.predict(np.reshape(state, [1, self.state_dim]))
+        if self.categorical_enabled:
+            q = q * self.z
+            return np.argmax(np.sum(q[0], axis=1))
         return np.argmax(q[0])
 
     def replay(self, batch_size):
@@ -388,8 +410,13 @@ class Rainbow():
             states, actions, rewards, new_states, dones, idxs, weights = samples
         else:
             states, actions, rewards, new_states, dones = samples
-
+        
         targets = self.q_model.predict_on_batch(states)
+        if self.categorical_enabled:
+            p = targets
+            targets = targets * self.z
+            targets = np.sum(targets, axis=2)
+
         if self.prioritized_memory_enabled:
             old_targets = targets.copy()
         if self.dd_enabled:
@@ -398,18 +425,40 @@ class Rainbow():
             Q_target = Q_target[range(batch_size), keep_actions]
         else:
             Q_target = self.q_target_model.predict_on_batch(new_states)
-            Q_target = np.max(Q_target, axis=1).flatten()
-
-        Q_target = Q_target * self.gamma
-        for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
-            if d:
-                target[action] = r
-            else:
-                target[action] = r + q_t
+            if self.categorical_enabled:
+                keep_actions = Q_target * self.z
+                keep_actions = np.sum(keep_actions, axis=2)
+                keep_actions = np.argmax(keep_actions, axis=1)
+            Q_target = Q_target[range(batch_size), keep_actions]
+        if self.categorical_enabled:
+            m = np.zeros((batch_size, self.action_dim, self.atoms))
+            for i in range(batch_size):
+                for j in range(self.atoms):
+                    d = 0 if dones[i] else 1
+                    tz = max(self.v_min ,min(self.v_max, rewards[i] + d * self.gamma * self.z[j]))
+                    bj = (tz - self.v_min) / self.z_delta
+                    l, u = np.floor(bj), np.ceil(bj)
+                    m[i][keep_actions[i]][int(l)] += Q_target[i][j] * (u - bj)
+                    m[i][keep_actions[i]][int(u)] += Q_target[i][j] * (bj - l)
+            targets = m * p
+        else:
+            Q_target = Q_target * self.gamma
+            for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
+                if d:
+                    target[action] = r
+                else:
+                    target[action] = r + q_t
 
         if self.prioritized_memory_enabled:
             indices = np.arange(batch_size)
-            errors = np.abs(targets[indices, actions] -
+            
+            if self.categorical_enabled:
+                new_targets = targets * self.z
+                new_targets = np.sum(new_targets, axis=2)
+            else:
+                new_targets = targets
+            
+            errors = np.abs(new_targets[indices, actions] -
                             old_targets[indices, actions])
             for i in range(batch_size):
                 self.memory.update(idxs[i], errors[i])
