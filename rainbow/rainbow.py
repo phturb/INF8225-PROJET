@@ -1,6 +1,9 @@
 import gym
+import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1" # Comment this line to use GPU instead of CPU
 import numpy as np
 import random
+import time
 import tensorflow as tf
 import keras.backend as K
 
@@ -518,6 +521,7 @@ class Rainbow():
             self.multistep_buffer = []
         total_trials_steps = 0
         for trial in range(max_trials):
+            episode_start_time = time.time()
             callbacks.on_epoch_begin(trial)
             done = False
             trial_total_reward = 0
@@ -527,6 +531,7 @@ class Rainbow():
             if self.is_atari:
                 current_state = atari_state_processor(current_state)
             while not done:
+                start_time = time.time()
                 callbacks.on_batch_begin(trial_steps)                   
 
                 if render:
@@ -545,28 +550,34 @@ class Rainbow():
                     self.update_model()
 
                 current_state = next_state
+                end_time = time.time()
                 step_logs = {
                     'action': action,
                     'observation': current_state,
                     'reward': reward,
                     'metrics': metrics,
                     'episode': trial,
+                    'time': (end_time - start_time)
                 }
+                print((end_time - start_time))
                 callbacks.on_batch_end(trial_steps, step_logs)
                 trial_total_reward += reward
                 trial_steps += 1
+
+            episode_end_time = time.time()
 
             episode_logs = {
                 'episode_reward': trial_total_reward,
                 'nb_episode_steps': trial_steps,
                 'nb_steps': total_trials_steps,
+                'episode_time': (episode_end_time - episode_start_time)
             }
 
             self.multistep_reset()
-
+            
             callbacks.on_epoch_end(trial, episode_logs)
             total_trials_steps += trial_steps
-            print(f"Trial {trial} complete with reward : {trial_total_reward}")
+            print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
         callbacks.on_train_end()
         return history
 
