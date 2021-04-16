@@ -8,7 +8,7 @@ from keras.callbacks import TensorBoard
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--env", type=str, dest="env_name", default="cart-pole",
-                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman"])
+                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman", "space-invaders"])
     parser.add_argument('-t', '--train', dest='train', action='store_true')
     parser.add_argument('--no-train', dest='train', action='store_false')
     parser.add_argument('-m', '--model-name', type=str,
@@ -21,6 +21,7 @@ def main():
     parser.add_argument('-nyt','--noisy-net-theta', type=float, dest="noisy_net_theta", default=0.5)
     parser.add_argument('-pm','--prioritized-memory-enabled',dest="prioritized_memory_enabled", action='store_true')
     parser.add_argument('-di','--categorical-enabled', dest="categorical_enabled", action='store_true')
+    parser.add_argument('-wa','--warmup', dest="warmup", type=int, default=100)
     parser.add_argument('-r', '--render', dest='render', action='store_true')
     parser.add_argument('--no-render', dest='render', action='store_false')
     parser.add_argument('--no-tensorboard', dest='w_tensorboard', action='store_false')
@@ -37,9 +38,10 @@ def main():
         "cart-pole": "CartPole-v1",
         "pong": "Pong-v0",
         "brick-breaker": "Breakout-v0",
-        "pacman": "MsPacman-v0"
+        "pacman": "MsPacman-v0",
+        "space-invaders": "SpaceInvaders-v0"
     }
-    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman"
+    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman" or args.env_name == "space-invaders"
 
     model_name = args.model_name
     model_ext = ""
@@ -75,7 +77,7 @@ def main():
     # n_step > 1 activate multistep
     
     if args.train:
-        history = agent.train(render=args.render, max_trials=args.max_trials, n_step=args.n_step, callbacks=callbacks)
+        history = agent.train(render=args.render, max_trials=args.max_trials, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks, model_update_delay=2)
         agent.save_models()
         print(history.history)
     else:

@@ -15,7 +15,7 @@ from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D,
 from keras.models import Model, load_model
 from keras.losses import MeanSquaredError, CategoricalCrossentropy
 from keras.optimizers import Adam
-from keras.callbacks import History, CallbackList, TensorBoard
+from keras.callbacks import History, CallbackList
 
 
 class DefaultMemory():
@@ -360,12 +360,14 @@ class Rainbow():
              # Categorical (Distributional) + Dueling
             print("Categorical + Dueling")
             outputs = []
-            for i in range(output_shape + 1):
-                outputs.append(Dense(self.atoms, name=f"categorical_dense_{i}")(x))
+            for _ in range(output_shape):
+                outputs.append(Dense(self.atoms, x.shape[1])(x))
+            v = Dense(self.atoms, name=f"categorical_dense_{i}")(x)
             outputs = Concatenate()(outputs)
-            outputs = Reshape(( output_shape + 1 , self.atoms))(outputs)
-            def avg_duel(a):
-                return K.expand_dims(a[:, 0], 0) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
+            outputs = Reshape(( output_shape , self.atoms))(outputs)
+            def avg_duel(s):
+                a, v = s
+                return K.expand_dims(v, 1) + (a - K.mean(a, axis=1, keepdims=True))
             action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))(outputs)
             action = Activation('softmax')(action)
             
@@ -374,13 +376,15 @@ class Rainbow():
              # Categorical (Distributional) + Noisy Net + Dueling
             print("Categorical + Noisy Net + Dueling")
             outputs = []
-            for _ in range(output_shape + 1):
+            for _ in range(output_shape):
                 outputs.append(NoisyDense(self.atoms, x.shape[1])(x))
+            v = NoisyDense(self.atoms, x.shape[1])(x)
             outputs = Concatenate()(outputs)
-            outputs = Reshape(( output_shape + 1 , self.atoms))(outputs)
-            def avg_duel(a):
-                return K.expand_dims(a[:, 0], 0) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
-            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))(outputs)
+            outputs = Reshape(( output_shape , self.atoms))(outputs)
+            def avg_duel(s):
+                a, v = s
+                return K.expand_dims(v, 1) + (a - K.mean(a, axis=1, keepdims=True))
+            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))([outputs, v])
             action = Activation('softmax')(action)
         else:    
             # Default DQN
@@ -388,6 +392,8 @@ class Rainbow():
         return Model(inputs=inputs, outputs=action)
 
     def action(self, state, testing=False):
+        if testing:
+            return self.predict_action(state)
         self.epsilon *= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
         if np.random.rand() <= self.epsilon:
@@ -416,13 +422,8 @@ class Rainbow():
             states, actions, rewards, new_states, dones = samples
 
         if self.is_atari:
-            # states = list(map(atari_state_processor, states))
-            # print(states)
-            # states = list(map(atari_state_processor, states))
-            # new_states = list(map(atari_state_processor, new_states))
-            # print(states)
             new_states = np.reshape(new_states , (batch_size, 84, 84, 1))      
-            states = np.reshape(states , (batch_size, 84, 84, 1))        
+            states = np.reshape(states , (batch_size, 84, 84, 1))  
 
         targets = self.q_model.predict_on_batch(states)
         if self.categorical_enabled:
@@ -543,6 +544,7 @@ class Rainbow():
                     next_state = atari_state_processor(next_state)
                 self.remember(current_state, action, reward, next_state, done)
 
+                metrics = None
                 if warmup <= total_trials_steps:
                     metrics = self.replay(batch_size)
 
@@ -559,7 +561,6 @@ class Rainbow():
                     'episode': trial,
                     'time': (end_time - start_time)
                 }
-                print((end_time - start_time))
                 callbacks.on_batch_end(trial_steps, step_logs)
                 trial_total_reward += reward
                 trial_steps += 1
