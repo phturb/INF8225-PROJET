@@ -1,14 +1,16 @@
 import gym
 import argparse
+import sys
 from rainbow.rainbow import Rainbow
 from keras.callbacks import TensorBoard
 # from ddqn import DDQN
 
 
 def main():
+    print(sys.argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--env", type=str, dest="env_name", default="cart-pole",
-                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman", "space-invaders"])
+                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman", "space-invaders", "pendulum"])
     parser.add_argument('-t', '--train', dest='train', action='store_true')
     parser.add_argument('--no-train', dest='train', action='store_false')
     parser.add_argument('-m', '--model-name', type=str,
@@ -33,13 +35,15 @@ def main():
     parser.set_defaults(categorical_enabled=False)
     parser.set_defaults(w_tensorboard=True)
     args = parser.parse_args()
+    print(args)
     env_choices = {
         "mountain-car": "MountainCar-v0",
         "cart-pole": "CartPole-v1",
         "pong": "Pong-v0",
         "brick-breaker": "Breakout-v0",
         "pacman": "MsPacman-v0",
-        "space-invaders": "SpaceInvaders-v0"
+        "space-invaders": "SpaceInvaders-v0",
+        "pendulum" : "Acrobot-v1"
     }
     is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman" or args.env_name == "space-invaders"
 
@@ -55,12 +59,16 @@ def main():
         model_ext += "_prioritized"
     if args.categorical_enabled:
         model_ext += "_dist"
+    if args.n_step > 1:
+        model_ext += "_multi"
     
     env_name = env_choices[args.env_name]
-
     model_name += model_ext + "_" + env_name
 
     env = gym.make(env_name)
+
+    print(f"Starting training for agent\n\tnamed :\t{model_name}\n\tgym :\t{env_name}")
+
     agent = Rainbow(env,
             model_name=model_name,
             dd_enabled=args.dd_enabled,
