@@ -11,7 +11,7 @@ from PIL import Image
 from copy import deepcopy
 from collections import deque
 
-from keras import activations
+from keras import activations , initializers
 from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten, Concatenate,Reshape 
 from keras.models import Model, load_model
 from keras.losses import MeanSquaredError, CategoricalCrossentropy
@@ -160,21 +160,26 @@ class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
 
 
 class NoisyDense(Layer):
-    def __init__(self, units, activation=None, sigma=0.5, **kwargs):
+    def __init__(self, units, activation=None, sigma=0.5, mu_initializer=None, sigma_initializer=None, w_eps=None, b_eps=None, **kwargs):
         super(NoisyDense, self).__init__(**kwargs)
         self.units = units
         self.sigma = sigma
         self.activation = activations.get(activation)
+        self.mu_initializer = initializers.get(mu_initializer)
+        self.sigma_initializer = initializers.get(sigma_initializer)
+        self.w_eps = w_eps
+        self.b_eps = b_eps
 
     def build(self, input_shape):
-        self.reset_noise(input_shape[-1])
+        if self.w_eps is None or self.b_eps is None:
+            self.reset_noise(input_shape[-1])
         mu_range = 1 / np.sqrt(input_shape[-1])
         self.mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range)
         self.sigma_initializer = tf.constant_initializer(self.sigma / np.sqrt(self.units))
-        self.w_mu = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.mu_initializer, trainable=True)
-        self.w_sigma = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.sigma_initializer, trainable=True)
-        self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True)
-        self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_initializer, trainable=True)
+        self.w_mu = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.mu_initializer, trainable=True, name='w_mu')
+        self.w_sigma = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.sigma_initializer, trainable=True, name='w_sigma')
+        self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True, name='b_mu')
+        self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_initializer, trainable=True, name='b_sigma')
 
     def call(self, inputs):
         self.kernel = self.w_mu + self.w_sigma * self.w_eps
@@ -196,6 +201,15 @@ class NoisyDense(Layer):
 
     def get_config(self):
         config = super(NoisyDense, self).get_config()
+        config.update({
+            "units": self.units,
+            "activation": activations.serialize(self.activation),
+            "sigma": self.sigma,
+            "mu_initializer": initializers.serialize(self.mu_initializer),
+            "sigma_initializer": initializers.serialize(self.sigma_initializer),
+            "b_eps": self.b_eps.numpy(),
+            "w_eps": self.w_eps.numpy()
+        })
         return config
 
 def atari_state_processor(state):
@@ -283,12 +297,16 @@ class Rainbow():
         self.q_target_model.set_weights(q_target_weights)
 
     def save_models(self):
-        self.q_model.save("./models/" + self.model_name +"/base")
-        self.q_target_model.save("./models/"+self.model_name +"/target")
+        base_path = f"./models/{self.model_name}/base"
+        target_path = f"./models/{self.model_name}/target"
+        self.q_model.save(base_path, overwrite=True)
+        self.q_target_model.save(target_path, overwrite=True)
 
     def load_models(self):
-        self.q_model = load_model("./models/" +self.model_name +"/base")
-        self.q_target_model = load_model("./models/"+self.model_name +"/target")
+        base_path = f"./models/{self.model_name}/base"
+        target_path = f"./models/{self.model_name}/target"
+        self.q_model = load_model(base_path, custom_objects={"NoisyDense": NoisyDense})
+        self.q_target_model = load_model(target_path, custom_objects={"NoisyDense": NoisyDense})
 
     def create_model(self, input_shape, output_shape):
         
