@@ -318,8 +318,7 @@ class Rainbow():
             x = Activation('relu')(x)
             x = Flatten()(x)
             if self.noisy_net_enabled:
-                x = NoisyDense(256, x.shape[1])(x)
-                x = Activation('relu')(x)
+                x = NoisyDense(256, activation='relu')(x)
             else:
                 x = Dense(256, activation='relu')(x)
         else:
