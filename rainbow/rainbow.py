@@ -11,6 +11,7 @@ from PIL import Image
 from copy import deepcopy
 from collections import deque
 
+from keras import activations
 from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten, Concatenate,Reshape 
 from keras.models import Model, load_model
 from keras.losses import MeanSquaredError, CategoricalCrossentropy
@@ -159,35 +160,29 @@ class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
 
 
 class NoisyDense(Layer):
-    def __init__(self, units, input_dim, std_init=0.5, use_bias=True):
-        super().__init__()
+    def __init__(self, units, activation=None, sigma=0.5, **kwargs):
+        super(NoisyDense, self).__init__(**kwargs)
         self.units = units
-        self.std_init = std_init
-        self.use_bias = use_bias
-        self.reset_noise(input_dim)
+        self.sigma = sigma
+        self.activation = activations.get(activation)
 
-        mu_range = 1 / np.sqrt(input_dim)
-        mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range)
-        sigma_initializer = tf.constant_initializer(
-            self.std_init / np.sqrt(self.units))
-
-        self.weight_mu = tf.Variable(initial_value=mu_initializer(shape=(input_dim, units), dtype='float32'),
-                                     trainable=True)
-
-        self.weight_sigma = tf.Variable(initial_value=sigma_initializer(shape=(input_dim, units), dtype='float32'),
-                                        trainable=True)
-        if self.use_bias:
-            self.bias_mu = tf.Variable(initial_value=mu_initializer(shape=(units,), dtype='float32'),
-                                       trainable=True)
-
-            self.bias_sigma = tf.Variable(initial_value=sigma_initializer(shape=(units,), dtype='float32'),
-                                          trainable=True)
+    def build(self, input_shape):
+        self.reset_noise(input_shape[-1])
+        mu_range = 1 / np.sqrt(input_shape[-1])
+        self.mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range)
+        self.sigma_initializer = tf.constant_initializer(self.sigma / np.sqrt(self.units))
+        self.w_mu = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.mu_initializer, trainable=True)
+        self.w_sigma = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.sigma_initializer, trainable=True)
+        self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True)
+        self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_initializer, trainable=True)
 
     def call(self, inputs):
-        self.kernel = self.weight_mu + self.weight_sigma * self.weights_eps
-        if self.use_bias:
-            self.bias = self.bias_mu + self.bias_sigma * self.bias_eps
-        return tf.matmul(inputs, self.kernel) + self.bias
+        self.kernel = self.w_mu + self.w_sigma * self.w_eps
+        self.bias = self.b_mu + self.b_sigma * self.b_eps
+        outputs = tf.matmul(inputs, self.kernel) + self.bias
+        if self.activation is not None:
+            outputs = self.activation(outputs)
+        return outputs
 
     def _scale_noise(self, dim):
         noise = tf.random.normal([dim])
@@ -196,15 +191,18 @@ class NoisyDense(Layer):
     def reset_noise(self, input_shape):
         eps_in = self._scale_noise(input_shape)
         eps_out = self._scale_noise(self.units)
-        self.weights_eps = tf.multiply(tf.expand_dims(eps_in, 1), eps_out)
-        if self.use_bias:
-            self.bias_eps = eps_out
+        self.w_eps = tf.multiply(tf.expand_dims(eps_in, 1), eps_out)
+        self.b_eps = eps_out
+
+    def get_config(self):
+        config = super(NoisyDense, self).get_config()
+        return config
 
 def atari_state_processor(state):
     INPUT_SHAPE = (84, 84)
+    CROP_SHAPE = (0,35,160,195)
     img = Image.fromarray(state)
-    img = img.resize(INPUT_SHAPE).convert(
-        'L')  # resize and convert to grayscale
+    img = img.crop(CROP_SHAPE).resize(INPUT_SHAPE).convert('L')  # resize and convert to grayscale
     processed_state = np.array(img) / 255
     processed_state = processed_state.reshape(1 ,84, 84, 1)
     return processed_state
@@ -262,7 +260,7 @@ class Rainbow():
         self.z = np.array([ (v_min + i*self.z_delta) for i in range(atoms)  ])
 
         if self.categorical_enabled:
-            self.crit = CategoricalCrossentropy()
+            self.crit = CategoricalCrossentropy() # KL...
         else:
             self.crit = MeanSquaredError()
         self.opt = Adam(learning_rate=self.lr)
@@ -309,12 +307,9 @@ class Rainbow():
         else:
             inputs = Input((input_shape,))
             if self.noisy_net_enabled:
-                x = NoisyDense(24, input_shape)(inputs)
-                x = Activation('relu')(x)
-                x = NoisyDense(64, x.shape[1])(x)
-                x = Activation('relu')(x)
-                x = NoisyDense(24, x.shape[1])(x)
-                x = Activation('relu')(x)
+                x = NoisyDense(24, activation='relu')(inputs)
+                x = NoisyDense(64, activation='relu')(x)
+                x = NoisyDense(24, activation='relu')(x)
             else:
                 x = Dense(24, activation='relu')(inputs)
                 x = Dense(64, activation='relu')(x)
@@ -323,23 +318,25 @@ class Rainbow():
         if self.noisy_net_enabled and not self.dueling_enabled and not self.categorical_enabled:
             # Noisy Net
             print("Noisy Net")
-            x = NoisyDense(output_shape, x.shape[1])(x)
-            action = Activation('linear')(x)
+            action = NoisyDense(output_shape, activation='linear')(x)
         elif not self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
             # Dueling
             print("Dueling")
-            x = Dense(output_shape + 1, activation='linear')(x)
-            def avg_duel(a):
-                return K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
-            action = Lambda(avg_duel, output_shape=(output_shape,))(x)
+            a = Dense(output_shape + 1, activation='linear')(x)
+            v = Dense(1, activation='linear')(x)
+            def avg_duel(s):
+                a, v = s
+                return v + (a - K.mean(a, axis=1, keepdims=True))
+            action = Lambda(avg_duel, output_shape=(output_shape,))([a,v])
         elif self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
             # Dueling + Noisy Net
             print(" Dueling + Noisy Net")
-            x = NoisyDense(output_shape + 1, x.shape[1])(x)
-            x = Activation('linear')(x)
-            def avg_duel(a):
-                return K.expand_dims(a[:, 0], -1) + a[:, 1:] - K.mean(a[:, 1:], axis=1, keepdims=True)
-            action = Lambda(avg_duel, output_shape=(output_shape,))(x)
+            a = NoisyDense(output_shape + 1, activation='linear')(x)
+            v = Dense(1, activation='linear')(x)
+            def avg_duel(s):
+                a , v = s
+                return v + (a - K.mean(a, axis=1, keepdims=True))
+            action = Lambda(avg_duel, output_shape=(output_shape,))([a,v])
         elif not self.noisy_net_enabled and not self.dueling_enabled and self.categorical_enabled:
             # Categorical (Distributional)
             print("Categorical")
@@ -352,7 +349,7 @@ class Rainbow():
             print("Categorical + Noisy Net")
             outputs = []
             for _ in range(output_shape):
-                outputs.append(NoisyDense(self.atoms, x.shape[1])(x))
+                outputs.append(NoisyDense(self.atoms)(x))
             outputs = Concatenate()(outputs)
             outputs = Reshape(( output_shape, self.atoms))(outputs)
             action = Activation('softmax')(outputs)
@@ -361,14 +358,14 @@ class Rainbow():
             print("Categorical + Dueling")
             outputs = []
             for _ in range(output_shape):
-                outputs.append(Dense(self.atoms, x.shape[1])(x))
-            v = Dense(self.atoms, name=f"categorical_dense_{i}")(x)
+                outputs.append(Dense(self.atoms)(x))
+            v = Dense(self.atoms, name=f"categorical_dense")(x)
             outputs = Concatenate()(outputs)
             outputs = Reshape(( output_shape , self.atoms))(outputs)
             def avg_duel(s):
                 a, v = s
                 return K.expand_dims(v, 1) + (a - K.mean(a, axis=1, keepdims=True))
-            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))(outputs)
+            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))([outputs, v])
             action = Activation('softmax')(action)
             
             # action = outputs
@@ -377,8 +374,8 @@ class Rainbow():
             print("Categorical + Noisy Net + Dueling")
             outputs = []
             for _ in range(output_shape):
-                outputs.append(NoisyDense(self.atoms, x.shape[1])(x))
-            v = NoisyDense(self.atoms, x.shape[1])(x)
+                outputs.append(NoisyDense(self.atoms)(x))
+            v = NoisyDense(self.atoms, name=f"categorical_dense")(x)
             outputs = Concatenate()(outputs)
             outputs = Reshape(( output_shape , self.atoms))(outputs)
             def avg_duel(s):
