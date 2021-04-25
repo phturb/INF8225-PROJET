@@ -14,7 +14,7 @@ from collections import deque
 from keras import activations , initializers
 from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten, Concatenate,Reshape 
 from keras.models import Model, load_model
-from keras.losses import MeanSquaredError, CategoricalCrossentropy
+from keras.losses import MeanSquaredError, KLDivergence #CategoricalCrossentropy
 from keras.optimizers import Adam
 from keras.callbacks import History, CallbackList
 
@@ -218,26 +218,29 @@ def atari_state_processor(state):
     img = Image.fromarray(state)
     img = img.crop(CROP_SHAPE).resize(INPUT_SHAPE).convert('L')  # resize and convert to grayscale
     processed_state = np.array(img) / 255
-    processed_state = processed_state.reshape(1 ,84, 84, 1)
+    processed_state = processed_state.reshape(84, 84, 1)
     return processed_state
 
 class Rainbow():
     def __init__(self,
                  env,
+                 memory_capacity=10000, # memory_capacity=1000000,
+                 n_stacked_states=3,
                  model_name="rainbow",
-                 epsilon_min=0.1,
+                 epsilon_min=0.1, # epsilon_min=0
                  epsilon_decay=0.995,
                  gamma=0.99,
+                 adam_epsilon=0.00015,
                  lr=0.0005,  # lr=0.0000625,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
                  dueling_enabled=False,
                  noisy_net_theta=0.5, noisy_net_enabled=False,
-                 prioritization_w=0.5, prioritized_memory_enabled=False,
+                 prioritization_w=0.5, prioritization_b_min=0.4, prioritization_b_max=1, prioritized_memory_enabled=False,
                  atoms=51, v_min=-10, v_max=10, categorical_enabled=False):
         self.env = env
-        self.memory = PrioritizedMemory() if prioritized_memory_enabled else DefaultMemory()
+        self.memory = PrioritizedMemory(capacity=memory_capacity) if prioritized_memory_enabled else DefaultMemory(max_size=memory_capacity)
         self.model_name = model_name
         self.action_dim = env.action_space.n
         self.epsilon = 1.0
@@ -247,11 +250,11 @@ class Rainbow():
         self.lr = lr
 
         self.is_atari = is_atari
+        self.n_stacked_states = n_stacked_states
         if self.is_atari:
-            self.state_dim = (84, 84, 1)
+            self.state_dim = (n_stacked_states,) + (84, 84, 1)
         else:
-            self.state_dim = env.observation_space.shape[0]
-
+            self.state_dim = (n_stacked_states,) + env.observation_space.shape
         self.tau = tau
         # DDQn
         self.dd_enabled = dd_enabled
@@ -274,10 +277,11 @@ class Rainbow():
         self.z = np.array([ (v_min + i*self.z_delta) for i in range(atoms)  ])
 
         if self.categorical_enabled:
-            self.crit = CategoricalCrossentropy() # KL...
+            self.crit = KLDivergence() # KL...
         else:
             self.crit = MeanSquaredError()
-        self.opt = Adam(learning_rate=self.lr)
+        self.adam_epsilon = adam_epsilon
+        self.opt = Adam(learning_rate=self.lr,epsilon=adam_epsilon)
         self.init_models()
 
     def init_models(self):
@@ -309,100 +313,55 @@ class Rainbow():
         self.q_target_model = load_model(target_path, custom_objects={"NoisyDense": NoisyDense})
 
     def create_model(self, input_shape, output_shape):
-        
+        dense_layer = NoisyDense if self.noisy_net_enabled else Dense
+        if self.noisy_net_enabled:
+            print("Noisy Net")
         if self.is_atari:
             inputs = Input(input_shape)
-            x = Convolution2D(16, (8, 8), strides=(4, 4))(inputs)
-            x = Activation('relu')(x)
-            x = Convolution2D(32, (4, 4), strides=(2, 2))(x)
-            x = Activation('relu')(x)
+            x = Convolution2D(32, (8,8) , strides=(4, 4),activation='relu')(inputs)
+            x = Convolution2D(64, (4,4), strides=(2, 2), activation='relu')(x)
+            x = Convolution2D(64, (3,3), strides=(1, 1), activation='relu')(x)
             x = Flatten()(x)
-            if self.noisy_net_enabled:
-                x = NoisyDense(256, activation='relu')(x)
-            else:
-                x = Dense(256, activation='relu')(x)
+            x = dense_layer(512, activation='relu')(x)
         else:
-            inputs = Input((input_shape,))
-            if self.noisy_net_enabled:
-                x = NoisyDense(24, activation='relu')(inputs)
-                x = NoisyDense(64, activation='relu')(x)
-                x = NoisyDense(24, activation='relu')(x)
-            else:
-                x = Dense(24, activation='relu')(inputs)
-                x = Dense(64, activation='relu')(x)
-                x = Dense(24, activation='relu')(x)
+            inputs = Input(input_shape)
+            x = dense_layer(24, activation='relu')(inputs)
+            x = dense_layer(64, activation='relu')(x)
+            x = dense_layer(24, activation='relu')(x)
 
-        if self.noisy_net_enabled and not self.dueling_enabled and not self.categorical_enabled:
-            # Noisy Net
-            print("Noisy Net")
-            action = NoisyDense(output_shape, activation='linear')(x)
-        elif not self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
+        if self.dueling_enabled and not self.categorical_enabled:
             # Dueling
             print("Dueling")
-            a = Dense(output_shape + 1, activation='linear')(x)
-            v = Dense(1, activation='linear')(x)
+            a = dense_layer(output_shape, activation='linear')(x)
+            v = dense_layer(1, activation='linear')(x)
             def avg_duel(s):
                 a, v = s
                 return v + (a - K.mean(a, axis=1, keepdims=True))
             action = Lambda(avg_duel, output_shape=(output_shape,))([a,v])
-        elif self.noisy_net_enabled and self.dueling_enabled and not self.categorical_enabled:
-            # Dueling + Noisy Net
-            print(" Dueling + Noisy Net")
-            a = NoisyDense(output_shape + 1, activation='linear')(x)
-            v = Dense(1, activation='linear')(x)
-            def avg_duel(s):
-                a , v = s
-                return v + (a - K.mean(a, axis=1, keepdims=True))
-            action = Lambda(avg_duel, output_shape=(output_shape,))([a,v])
-        elif not self.noisy_net_enabled and not self.dueling_enabled and self.categorical_enabled:
+        elif not self.dueling_enabled and self.categorical_enabled:
             # Categorical (Distributional)
             print("Categorical")
-            outputs = [Dense(self.atoms, name=f"categorical_dense_{i}")(x) for i in range(output_shape)]
+            outputs = [dense_layer(self.atoms, name=f"categorical_dense_{i}")(x) for i in range(output_shape)]
             outputs = Concatenate()(outputs)
             outputs = Reshape(( output_shape, self.atoms))(outputs)
             action = Activation('softmax')(outputs)
-        elif self.noisy_net_enabled and not self.dueling_enabled and self.categorical_enabled:
-            # Categorical (Distributional) + Noisy Net
-            print("Categorical + Noisy Net")
-            outputs = []
-            for _ in range(output_shape):
-                outputs.append(NoisyDense(self.atoms)(x))
-            outputs = Concatenate()(outputs)
-            outputs = Reshape(( output_shape, self.atoms))(outputs)
-            action = Activation('softmax')(outputs)
-        elif not self.noisy_net_enabled and self.dueling_enabled and self.categorical_enabled:
+        elif self.dueling_enabled and self.categorical_enabled:
              # Categorical (Distributional) + Dueling
             print("Categorical + Dueling")
-            outputs = []
+            a = []
             for _ in range(output_shape):
-                outputs.append(Dense(self.atoms)(x))
-            v = Dense(self.atoms, name=f"categorical_dense")(x)
-            outputs = Concatenate()(outputs)
-            outputs = Reshape(( output_shape , self.atoms))(outputs)
+                a.append(dense_layer(self.atoms)(x))
+            v = dense_layer(self.atoms, name=f"categorical_dense")(x)
+            a = Concatenate()(a)
+            a = Reshape(( output_shape , self.atoms))(a)
             def avg_duel(s):
                 a, v = s
                 return K.expand_dims(v, 1) + (a - K.mean(a, axis=1, keepdims=True))
-            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))([outputs, v])
-            action = Activation('softmax')(action)
-            
-            # action = outputs
-        elif self.noisy_net_enabled and self.dueling_enabled and self.categorical_enabled:
-             # Categorical (Distributional) + Noisy Net + Dueling
-            print("Categorical + Noisy Net + Dueling")
-            outputs = []
-            for _ in range(output_shape):
-                outputs.append(NoisyDense(self.atoms)(x))
-            v = NoisyDense(self.atoms, name=f"categorical_dense")(x)
-            outputs = Concatenate()(outputs)
-            outputs = Reshape(( output_shape , self.atoms))(outputs)
-            def avg_duel(s):
-                a, v = s
-                return K.expand_dims(v, 1) + (a - K.mean(a, axis=1, keepdims=True))
-            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))([outputs, v])
+            action = Lambda(avg_duel, output_shape=(output_shape,self.atoms))([a, v])
             action = Activation('softmax')(action)
         else:    
             # Default DQN
-            action = Dense(output_shape, activation='linear')(x)
+            action = dense_layer(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
 
     def action(self, state, testing=False):
@@ -418,9 +377,9 @@ class Rainbow():
 
     def predict_action(self, state):
         if self.is_atari:   
-            q = self.q_model.predict(state)
+            q = self.q_model.predict(np.array([state]))
         else:
-            q = self.q_model.predict(np.reshape(state, [1, self.state_dim]))
+            q = self.q_model.predict(np.array([state]))
         if self.categorical_enabled:
             q = q * self.z
             return np.argmax(np.sum(q[0], axis=1))
@@ -435,9 +394,10 @@ class Rainbow():
         else:
             states, actions, rewards, new_states, dones = samples
 
-        if self.is_atari:
-            new_states = np.reshape(new_states , (batch_size, 84, 84, 1))      
-            states = np.reshape(states , (batch_size, 84, 84, 1))  
+        # if self.is_atari:
+        #     print(new_states.shape)
+        #     new_states = np.reshape(new_states , (batch_size, 84, 84, 1))      
+        #     states = np.reshape(states , (batch_size, 84, 84, 1))  
 
         targets = self.q_model.predict_on_batch(states)
         if self.categorical_enabled:
@@ -517,7 +477,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=32, warmup=0, model_update_delay=1, render=False, n_step=1, callbacks=None):
+    def train(self, max_trials=500, batch_size=32, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -528,6 +488,8 @@ class Rainbow():
             callbacks.set_model(self.q_model)
         else:
             callbacks._set_model(self.q_model)
+
+        total_rewards_history = deque(maxlen=50)
 
         callbacks.on_train_begin()
 
@@ -545,6 +507,11 @@ class Rainbow():
             current_state = deepcopy(self.env.reset())
             if self.is_atari:
                 current_state = atari_state_processor(current_state)
+                stacked_state = []
+                for _ in range(self.n_stacked_states):
+                    stacked_state.append(deepcopy(current_state))
+                current_state = stacked_state
+                
             while not done:
                 start_time = time.time()
                 callbacks.on_batch_begin(trial_steps)                   
@@ -556,8 +523,8 @@ class Rainbow():
                 next_state, reward, done, info = self.env.step(action)
                 if self.is_atari:
                     next_state = atari_state_processor(next_state)
-                self.remember(current_state, action, reward, next_state, done)
-
+                    next_state = np.append(stacked_state[1:], [next_state], axis=0)
+                self.remember(current_state, action, reward, next_state , done)
                 metrics = None
                 if warmup <= total_trials_steps:
                     metrics = self.replay(batch_size)
@@ -581,6 +548,7 @@ class Rainbow():
 
             episode_end_time = time.time()
 
+            total_rewards_history.append(trial_total_reward)
             episode_logs = {
                 'episode_reward': trial_total_reward,
                 'nb_episode_steps': trial_steps,
@@ -589,8 +557,15 @@ class Rainbow():
             }
 
             self.multistep_reset()
+
             
             callbacks.on_epoch_end(trial, episode_logs)
+            
+            if len(total_rewards_history) >= 50:
+                avg = sum(total_rewards_history)/len(total_rewards_history)
+                if avg >= 480:
+                    break
+
             total_trials_steps += trial_steps
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
         callbacks.on_train_end()
