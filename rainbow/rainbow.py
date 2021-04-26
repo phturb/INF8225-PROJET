@@ -14,10 +14,13 @@ from collections import deque
 from keras import activations , initializers
 from keras.layers import Input, Dense, Layer, Activation, Lambda, Convolution2D, Flatten, Concatenate,Reshape 
 from keras.models import Model, load_model
-from keras.losses import MeanSquaredError, KLDivergence #CategoricalCrossentropy
+from keras.losses import MeanSquaredError,CategoricalCrossentropy # KLDivergence #CategoricalCrossentropy
 from keras.optimizers import Adam
 from keras.callbacks import History, CallbackList
 
+np.random.seed(42)
+random.seed(42)
+tf.random.set_seed(42)
 
 class DefaultMemory():
     def __init__(self, max_size=10000):
@@ -181,9 +184,12 @@ class NoisyDense(Layer):
         self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True, name='b_mu')
         self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_initializer, trainable=True, name='b_sigma')
 
-    def call(self, inputs):
-        self.kernel = self.w_mu + self.w_sigma * self.w_eps
-        self.bias = self.b_mu + self.b_sigma * self.b_eps
+    def call(self, inputs, training=True):
+        self.kernel = self.w_mu
+        self.bias = self.b_mu
+        if training:
+            self.kernel += self.w_sigma * self.w_eps
+            self.bias += self.b_sigma * self.b_eps
         outputs = tf.matmul(inputs, self.kernel) + self.bias
         if self.activation is not None:
             outputs = self.activation(outputs)
@@ -193,7 +199,9 @@ class NoisyDense(Layer):
         noise = tf.random.normal([dim])
         return tf.sign(noise) * tf.sqrt(tf.abs(noise))
 
-    def reset_noise(self, input_shape):
+    def reset_noise(self, input_shape = None):
+        if input_shape is None:
+            input_shape = self.input_shape[-1]
         eps_in = self._scale_noise(input_shape)
         eps_out = self._scale_noise(self.units)
         self.w_eps = tf.multiply(tf.expand_dims(eps_in, 1), eps_out)
@@ -224,22 +232,23 @@ def atari_state_processor(state):
 class Rainbow():
     def __init__(self,
                  env,
-                 memory_capacity=10000, # memory_capacity=1000000,
+                 memory_capacity=50000, # memory_capacity=1000000,
                  n_stacked_states=3,
                  model_name="rainbow",
                  epsilon_min=0.1, # epsilon_min=0
-                 epsilon_decay=0.995,
+                 epsilon_decay=0.9995,
                  gamma=0.99,
                  adam_epsilon=0.00015,
-                 lr=0.0005,  # lr=0.0000625,
+                 lr=0.001,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
                  dueling_enabled=False,
                  noisy_net_theta=0.5, noisy_net_enabled=False,
                  prioritization_w=0.5, prioritization_b_min=0.4, prioritization_b_max=1, prioritized_memory_enabled=False,
-                 atoms=51, v_min=-10, v_max=10, categorical_enabled=False):
+                 atoms=51, v_min=-20, v_max=20, categorical_enabled=False):
         self.env = env
+        self.env.seed(42)
         self.memory = PrioritizedMemory(capacity=memory_capacity) if prioritized_memory_enabled else DefaultMemory(max_size=memory_capacity)
         self.model_name = model_name
         self.action_dim = env.action_space.n
@@ -274,14 +283,18 @@ class Rainbow():
         self.v_min = v_min
         self.v_max = v_max
         self.z_delta = (v_max - v_min) / (atoms - 1)
-        self.z = np.array([ (v_min + i*self.z_delta) for i in range(atoms)  ])
+        self.z = np.arange(v_min, v_max + self.z_delta/2, self.z_delta)
 
         if self.categorical_enabled:
-            self.crit = KLDivergence() # KL...
+            def modified_KL_Divergence(y_true, y_pred):
+                y_pred = tf.convert_to_tensor(y_pred)
+                y_true = tf.cast(y_true, y_pred.dtype)
+                return -tf.reduce_sum(y_true * tf.math.log(y_pred + 1e-7), axis=-1)
+            self.crit = modified_KL_Divergence # CategoricalCrossentropy() # KL...
         else:
             self.crit = MeanSquaredError()
         self.adam_epsilon = adam_epsilon
-        self.opt = Adam(learning_rate=self.lr,epsilon=adam_epsilon)
+        self.opt = Adam(learning_rate=self.lr) #,epsilon=adam_epsilon)
         self.init_models()
 
     def init_models(self):
@@ -367,28 +380,25 @@ class Rainbow():
             action = dense_layer(output_shape, activation='linear')(x)
         return Model(inputs=inputs, outputs=action)
 
-    def action(self, state, testing=False):
+    def forward(self, state, testing=False):
         if testing:
             return self.predict_action(state)
         self.epsilon *= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
         if np.random.rand() <= self.epsilon:
-            return self.env.action_space.sample()
+            return np.random.randint(0, self.action_dim - 1)
         else:
             return self.predict_action(state)
 
 
     def predict_action(self, state):
-        if self.is_atari:   
-            q = self.q_model.predict(np.array([state]))
-        else:
-            q = self.q_model.predict(np.array([state]))
+        q = self.q_model.predict(np.array([state]))
         if self.categorical_enabled:
             q = q * self.z
-            return np.argmax(np.sum(q[0], axis=1))
+            q = np.sum(q, axis=2)
         return np.argmax(q[0])
 
-    def replay(self, batch_size):
+    def backward(self, batch_size):
         samples = self.memory.sample(batch_size)
         if samples is None:
             return None
@@ -396,11 +406,6 @@ class Rainbow():
             states, actions, rewards, new_states, dones, idxs, weights = samples
         else:
             states, actions, rewards, new_states, dones = samples
-
-        # if self.is_atari:
-        #     print(new_states.shape)
-        #     new_states = np.reshape(new_states , (batch_size, 84, 84, 1))      
-        #     states = np.reshape(states , (batch_size, 84, 84, 1))  
 
         targets = self.q_model.predict_on_batch(states)
         if self.categorical_enabled:
@@ -410,14 +415,16 @@ class Rainbow():
 
         if self.prioritized_memory_enabled:
             old_targets = targets.copy()
-        if self.dd_enabled:
+        if not self.dd_enabled:
             keep_actions = np.argmax(targets, axis=1)
             Q_target = self.q_target_model.predict_on_batch(new_states)
+            p_ = Q_target
             Q_target = Q_target[range(batch_size), keep_actions]
         else:
             Q_target = self.q_target_model.predict_on_batch(new_states)
             if self.categorical_enabled:
-                keep_actions = Q_target * self.z
+                p_ = Q_target
+                keep_actions = p_ * self.z
                 keep_actions = np.sum(keep_actions, axis=2)
                 keep_actions = np.argmax(keep_actions, axis=1)
             else:
@@ -427,13 +434,22 @@ class Rainbow():
             m = np.zeros((batch_size, self.action_dim, self.atoms))
             for i in range(batch_size):
                 for j in range(self.atoms):
+                    a = actions[i]
+                    b_a = keep_actions[i]
                     d = 0 if dones[i] else 1
                     tz = max(self.v_min ,min(self.v_max, rewards[i] + d * self.gamma * self.z[j]))
                     bj = (tz - self.v_min) / self.z_delta
                     l, u = np.floor(bj), np.ceil(bj)
-                    m[i][keep_actions[i]][int(l)] += Q_target[i][j] * (u - bj)
-                    m[i][keep_actions[i]][int(u)] += Q_target[i][j] * (bj - l)
-            targets = m * p
+                    if not dones[i]:
+                        m[i][a][int(l)] += p_[i][b_a][j] * (u - bj)
+                        m[i][a][int(u)] += p_[i][b_a][j] * (bj - l)
+                    else:
+                        m[i][a][int(l)] += (u - bj)
+                        m[i][a][int(u)] += (bj - l)
+                    # for o_a in range(self.action_dim):
+                    #     if o_a != a:
+                    #         m[i][o_a][j] = p[i][o_a][j]
+            targets = m
         else:
             Q_target = Q_target * self.gamma
             for i, (target, r, action, q_t, d) in enumerate(zip(targets, rewards, actions, Q_target, dones)):
@@ -446,7 +462,7 @@ class Rainbow():
             indices = np.arange(batch_size)
             
             if self.categorical_enabled:
-                new_targets = targets * self.z
+                new_targets = p * self.z
                 new_targets = np.sum(new_targets, axis=2)
             else:
                 new_targets = targets
@@ -455,8 +471,12 @@ class Rainbow():
                             old_targets[indices, actions])
             for i in range(batch_size):
                 self.memory.update(idxs[i], errors[i])
-
-        return self.q_model.train_on_batch(states, targets)
+        loss = self.q_model.train_on_batch(states, targets)
+        if self.noisy_net_enabled:
+            for layer in self.q_model.layers:
+                if hasattr(layer, "reset_noise"):
+                    layer.reset_noise()
+        return loss
 
     def remember(self, current_state, action, reward, next_state, done):
         if self.n_step > 1:
@@ -480,7 +500,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=32, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None):
+    def train(self, max_trials=500, batch_size=32, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=480, avg_list_lenght=50):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -492,15 +512,19 @@ class Rainbow():
         else:
             callbacks._set_model(self.q_model)
 
-        total_rewards_history = deque(maxlen=50)
+        # Fast exit on last 50 values
+        total_rewards_history = deque(maxlen=avg_list_lenght)
 
         callbacks.on_train_begin()
 
+        # Multistep initializer
         self.n_step = n_step
         if self.n_step > 1:
             self.multistep_buffer = []
+
         total_trials_steps = 0
-        for trial in range(max_trials):
+        trial = 0
+        while trial < max_trials:
             episode_start_time = time.time()
             callbacks.on_epoch_begin(trial)
             done = False
@@ -522,7 +546,7 @@ class Rainbow():
                 if render:
                     self.env.render()
 
-                action = self.action(current_state)
+                action = self.forward(current_state)
                 next_state, reward, done, info = self.env.step(action)
                 if self.is_atari:
                     next_state = atari_state_processor(next_state)
@@ -530,7 +554,7 @@ class Rainbow():
                 self.remember(current_state, action, reward, next_state , done)
                 metrics = None
                 if warmup <= total_trials_steps:
-                    metrics = self.replay(batch_size)
+                    metrics = self.backward(batch_size)
 
                 if total_trials_steps % model_update_delay == 0:
                     self.update_model()
@@ -562,13 +586,15 @@ class Rainbow():
 
             
             callbacks.on_epoch_end(trial, episode_logs)
-            
-            if len(total_rewards_history) >= 50:
+
+            if len(total_rewards_history) >= avg_list_lenght:
                 avg = sum(total_rewards_history)/len(total_rewards_history)
-                if avg >= 480:
+                if avg >= avg_result_exit:
+                    print(f'Model has trained over the average : {avg_result_exit}')
                     break
 
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
+            trial += 1
         callbacks.on_train_end()
         return history
 
@@ -581,9 +607,10 @@ class Rainbow():
             while not done:
                 if render:
                     self.env.render()
-                action = self.action(current_state, testing=True)
+                action = self.forward(current_state, testing=True)
                 next_state, reward, done, info = self.env.step(action)
                 trial_total_reward += reward
+                current_state = next_state
             print(f"Trial {trial} complete with reward : {trial_total_reward}")
 
 
