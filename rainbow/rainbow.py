@@ -254,7 +254,7 @@ class Rainbow():
         if self.is_atari:
             self.state_dim = (n_stacked_states,) + (84, 84, 1)
         else:
-            self.state_dim = (n_stacked_states,) + env.observation_space.shape
+            self.state_dim = env.observation_space.shape
         self.tau = tau
         # DDQn
         self.dd_enabled = dd_enabled
