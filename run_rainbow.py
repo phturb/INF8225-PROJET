@@ -2,7 +2,7 @@ import gym
 import argparse
 import sys
 from rainbow.rainbow import Rainbow
-from keras.callbacks import TensorBoard
+from keras.callbacks import TensorBoard, ModelCheckpoint
 # from ddqn import DDQN
 
 
@@ -79,9 +79,11 @@ def main():
             is_atari=is_atari)
 
     if args.w_tensorboard:
-        callbacks = [TensorBoard(log_dir=f"./logs/rainbow/{model_name}", histogram_freq=1)]
+        callbacks = [TensorBoard(log_dir=f"./logs/rainbow/{model_name}", histogram_freq=1, update_freq='batch')]
     else:
-        callbacks = None
+        callbacks = []
+
+    callbacks.append(ModelCheckpoint(filepath=f"./{model_name}_weights.h5"))
     # n_step > 1 activate multistep
     
     if args.train:

@@ -294,11 +294,14 @@ class Rainbow():
 
     def update_model(self):
         q_weights = self.q_model.get_weights()
-        q_target_weights = self.q_target_model.get_weights()
-        for i in range(len(q_target_weights)):
-            q_target_weights[i] = self.tau * q_weights[i] + \
-                (1 - self.tau) * q_target_weights[i]
-        self.q_target_model.set_weights(q_target_weights)
+        if self.tau < 1:
+            q_target_weights = self.q_target_model.get_weights()
+            for i in range(len(q_target_weights)):
+                q_target_weights[i] = self.tau * q_weights[i] + \
+                    (1 - self.tau) * q_target_weights[i]
+            self.q_target_model.set_weights(q_target_weights)
+        else:
+            self.q_target_model.set_weights(q_weights)
 
     def save_models(self):
         base_path = f"./models/{self.model_name}/base"
@@ -504,12 +507,12 @@ class Rainbow():
             trial_total_reward = 0
             trial_steps = 0
 
-            current_state = deepcopy(self.env.reset())
+            current_state = self.env.reset()
             if self.is_atari:
                 current_state = atari_state_processor(current_state)
                 stacked_state = []
                 for _ in range(self.n_stacked_states):
-                    stacked_state.append(deepcopy(current_state))
+                    stacked_state.append(current_state)
                 current_state = stacked_state
                 
             while not done:
@@ -542,10 +545,10 @@ class Rainbow():
                     'episode': trial,
                     'time': (end_time - start_time)
                 }
-                callbacks.on_batch_end(trial_steps, step_logs)
+                callbacks.on_batch_end(total_trials_steps, step_logs)
                 trial_total_reward += reward
                 trial_steps += 1
-
+                total_trials_steps += 1
             episode_end_time = time.time()
 
             total_rewards_history.append(trial_total_reward)
@@ -555,7 +558,6 @@ class Rainbow():
                 'nb_steps': total_trials_steps,
                 'episode_time': (episode_end_time - episode_start_time)
             }
-
             self.multistep_reset()
 
             
@@ -566,7 +568,6 @@ class Rainbow():
                 if avg >= 480:
                     break
 
-            total_trials_steps += trial_steps
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
         callbacks.on_train_end()
         return history
@@ -576,7 +577,7 @@ class Rainbow():
         for trial in range(max_trials):
             done = False
             trial_total_reward = 0
-            current_state = deepcopy(self.env.reset())
+            current_state = self.env.reset()
             while not done:
                 if render:
                     self.env.render()
