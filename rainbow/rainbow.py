@@ -18,9 +18,11 @@ from keras.losses import MeanSquaredError,CategoricalCrossentropy # KLDivergence
 from keras.optimizers import Adam
 from keras.callbacks import History, CallbackList
 
-np.random.seed(42)
-random.seed(42)
-tf.random.set_seed(42)
+SEED = 42
+
+np.random.seed(SEED)
+random.seed(SEED)
+tf.random.set_seed(SEED)
 
 class DefaultMemory():
     def __init__(self, max_size=10000):
@@ -106,14 +108,16 @@ class SumTree:
 
 
 class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
-    e = 0.01
-    a = 0.6
-    beta = 0.4
-    beta_increment_per_sampling = 0.001
 
-    def __init__(self, capacity=10000):
+
+    def __init__(self, capacity=10000, e=0.01, a=0.6, beta=0.4, beta_max=1., beta_increment_per_sampling=0.001):
         self.tree = SumTree(capacity)
         self.capacity = capacity
+        self.e = e
+        self.a = a
+        self.beta = beta
+        self.beta_max = beta_max
+        self.beta_increment_per_sampling = beta_increment_per_sampling
 
     def _get_priority(self, error):
         return (np.abs(error) + self.e) ** self.a
@@ -132,7 +136,7 @@ class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
         segment = self.tree.total() / n
         priorities = []
 
-        self.beta = np.min([1., self.beta + self.beta_increment_per_sampling])
+        self.beta = np.min([self.beta_max, self.beta + self.beta_increment_per_sampling])
 
         for i in range(n):
             a = segment * i
@@ -163,41 +167,44 @@ class PrioritizedMemory:  # stored as ( s, a, r, s_ ) in SumTree
 
 
 class NoisyDense(Layer):
-    def __init__(self, units, activation=None, sigma=0.5, mu_initializer=None, sigma_initializer=None, w_eps=None, b_eps=None, **kwargs):
+    def __init__(self, units, activation=None, sigma=0.5, mu_initializer=None, sigma_w_initializer=None, sigma_b_initializer=None, **kwargs):
         super(NoisyDense, self).__init__(**kwargs)
         self.units = units
         self.sigma = sigma
         self.activation = activations.get(activation)
         self.mu_initializer = initializers.get(mu_initializer)
-        self.sigma_initializer = initializers.get(sigma_initializer)
-        self.w_eps = w_eps
-        self.b_eps = b_eps
+        self.sigma_w_initializer = initializers.get(sigma_w_initializer)
+        self.sigma_b_initializer = initializers.get(sigma_b_initializer)
 
     def build(self, input_shape):
-        if self.w_eps is None or self.b_eps is None:
-            self.reset_noise(input_shape[-1])
+        self.reset_noise(input_shape[-1])
         mu_range = 1 / np.sqrt(input_shape[-1])
-        self.mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range)
-        self.sigma_initializer = tf.constant_initializer(self.sigma / np.sqrt(self.units))
-        self.w_mu = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.mu_initializer, trainable=True, name='w_mu')
-        self.w_sigma = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.sigma_initializer, trainable=True, name='w_sigma')
-        self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True, name='b_mu')
-        self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_initializer, trainable=True, name='b_sigma')
+        self.mu_initializer = tf.random_uniform_initializer(-mu_range, mu_range, seed=SEED)
+        self.sigma_w_initializer = tf.constant_initializer(self.sigma / np.sqrt(input_shape[-1]))
+        self.sigma_b_initializer = tf.constant_initializer(self.sigma / np.sqrt(self.units))
+        self.w_mu = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.mu_initializer, trainable=True, name='w_mu', dtype='float32')
+        self.w_sigma = self.add_weight(shape=(input_shape[-1], self.units), initializer=self.sigma_w_initializer, trainable=True, name='w_sigma', dtype='float32')
+        self.b_mu = self.add_weight(shape=(self.units,), initializer=self.mu_initializer, trainable=True, name='b_mu', dtype='float32')
+        self.b_sigma = self.add_weight(shape=(self.units,), initializer=self.sigma_b_initializer, trainable=True, name='b_sigma', dtype='float32')
 
     def call(self, inputs, training=True):
-        self.kernel = self.w_mu
-        self.bias = self.b_mu
         if training:
-            self.kernel += self.w_sigma * self.w_eps
-            self.bias += self.b_sigma * self.b_eps
-        outputs = tf.matmul(inputs, self.kernel) + self.bias
+            self.kernel = tf.add(self.w_mu, tf.multiply(self.w_sigma, self.w_eps))
+            outputs = tf.matmul(inputs, self.kernel)
+            self.bias = tf.add(self.b_mu, tf.multiply(self.b_sigma, self.b_eps))
+            outputs = tf.nn.bias_add(outputs, self.bias)
+        else:
+            self.kernel = self.w_mu
+            outputs = tf.matmul(inputs, self.kernel)
+            self.bias = self.b_mu
+            outputs = tf.nn.bias_add(outputs, self.bias)            
         if self.activation is not None:
             outputs = self.activation(outputs)
         return outputs
 
     def _scale_noise(self, dim):
         noise = tf.random.normal([dim])
-        return tf.sign(noise) * tf.sqrt(tf.abs(noise))
+        return tf.multiply(tf.sign(noise), tf.sqrt(tf.abs(noise)))
 
     def reset_noise(self, input_shape = None):
         if input_shape is None:
@@ -214,9 +221,8 @@ class NoisyDense(Layer):
             "activation": activations.serialize(self.activation),
             "sigma": self.sigma,
             "mu_initializer": initializers.serialize(self.mu_initializer),
-            "sigma_initializer": initializers.serialize(self.sigma_initializer),
-            "b_eps": self.b_eps.numpy(),
-            "w_eps": self.w_eps.numpy()
+            "sigma_w_initializer": initializers.serialize(self.sigma_w_initializer),
+            "sigma_b_initializer" : initializers.serialize(self.sigma_b_initializer)
         })
         return config
 
@@ -235,11 +241,11 @@ class Rainbow():
                  memory_capacity=50000, # memory_capacity=1000000,
                  n_stacked_states=3,
                  model_name="rainbow",
-                 epsilon_min=0.1, # epsilon_min=0
-                 epsilon_decay=0.9995,
+                 epsilon_min=0.01, # epsilon_min=0
+                 epsilon_decay=0.000033,#0.00000396,
                  gamma=0.99,
                  adam_epsilon=0.00015,
-                 lr=0.001,
+                 lr=0.0000625,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
@@ -248,11 +254,11 @@ class Rainbow():
                  prioritization_w=0.5, prioritization_b_min=0.4, prioritization_b_max=1, prioritized_memory_enabled=False,
                  atoms=51, v_min=-20, v_max=20, categorical_enabled=False):
         self.env = env
-        self.env.seed(42)
+        self.env.seed(SEED)
         self.memory = PrioritizedMemory(capacity=memory_capacity) if prioritized_memory_enabled else DefaultMemory(max_size=memory_capacity)
         self.model_name = model_name
         self.action_dim = env.action_space.n
-        self.epsilon = 1.0
+        self.epsilon = 1.
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
         self.gamma = gamma
@@ -294,7 +300,7 @@ class Rainbow():
         else:
             self.crit = MeanSquaredError()
         self.adam_epsilon = adam_epsilon
-        self.opt = Adam(learning_rate=self.lr) #,epsilon=adam_epsilon)
+        self.opt = Adam(learning_rate=self.lr, epsilon=adam_epsilon)
         self.init_models()
 
     def init_models(self):
@@ -330,8 +336,10 @@ class Rainbow():
 
     def create_model(self, input_shape, output_shape):
         dense_layer = NoisyDense if self.noisy_net_enabled else Dense
+        name="DQN"
         if self.noisy_net_enabled:
             print("Noisy Net")
+            name+="_Noisy_Net"
         if self.is_atari:
             inputs = Input(input_shape)
             x = Convolution2D(32, (8,8) , strides=(4, 4),activation='relu')(inputs)
@@ -348,6 +356,7 @@ class Rainbow():
         if self.dueling_enabled and not self.categorical_enabled:
             # Dueling
             print("Dueling")
+            name+="_Dueling"
             a = dense_layer(output_shape, activation='linear')(x)
             v = dense_layer(1, activation='linear')(x)
             def avg_duel(s):
@@ -357,6 +366,7 @@ class Rainbow():
         elif not self.dueling_enabled and self.categorical_enabled:
             # Categorical (Distributional)
             print("Categorical")
+            name+="_Categorical"
             outputs = [dense_layer(self.atoms, name=f"categorical_dense_{i}")(x) for i in range(output_shape)]
             outputs = Concatenate()(outputs)
             outputs = Reshape(( output_shape, self.atoms))(outputs)
@@ -364,6 +374,7 @@ class Rainbow():
         elif self.dueling_enabled and self.categorical_enabled:
              # Categorical (Distributional) + Dueling
             print("Categorical + Dueling")
+            name+="_Categorical_Dueling"
             a = []
             for _ in range(output_shape):
                 a.append(dense_layer(self.atoms)(x))
@@ -378,12 +389,12 @@ class Rainbow():
         else:    
             # Default DQN
             action = dense_layer(output_shape, activation='linear')(x)
-        return Model(inputs=inputs, outputs=action)
+        return Model(inputs=inputs, outputs=action, name=name)
 
     def forward(self, state, testing=False):
         if testing:
             return self.predict_action(state)
-        self.epsilon *= self.epsilon_decay
+        self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, self.action_dim - 1)
@@ -500,7 +511,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=32, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=480, avg_list_lenght=50):
+    def train(self, max_trials=500, batch_size=64, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=480, avg_list_lenght=50):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]

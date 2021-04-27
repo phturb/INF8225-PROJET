@@ -89,7 +89,6 @@ def main():
     if args.train:
         history = agent.train(render=args.render, max_trials=args.max_trials, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks, model_update_delay=2)
         agent.save_models()
-        print(history.history)
     else:
         agent.load_models()
     agent.test(render=args.render)
