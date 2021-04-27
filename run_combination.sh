@@ -13,7 +13,7 @@
 #     done;
 # done
 
-WA="-wa 10000 -mt 5000"
+WA="-wa 1000 -mt 2000"
 
 python ./run_rainbow.py $WA
 python ./run_rainbow.py -dd $WA

@@ -241,11 +241,12 @@ class Rainbow():
                  memory_capacity=50000, # memory_capacity=1000000,
                  n_stacked_states=3,
                  model_name="rainbow",
-                 epsilon_min=0.01, # epsilon_min=0
-                 epsilon_decay=0.000033,#0.00000396,
+                 epsilon_min=0.1, # epsilon_min=0
+                 epsilon_frame_decay=5000,#0.00000396,
                  gamma=0.99,
                  adam_epsilon=0.00015,
-                 lr=0.0000625,
+                 alpha_decay=0.005,
+                 lr=0.001,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
@@ -259,10 +260,13 @@ class Rainbow():
         self.model_name = model_name
         self.action_dim = env.action_space.n
         self.epsilon = 1.
+        self.epsilon_max = 1.
         self.epsilon_min = epsilon_min
-        self.epsilon_decay = epsilon_decay
+        self.epsilon_frame_decay = epsilon_frame_decay
+        self.epsilon_decay = (self.epsilon_max - self.epsilon_min) / self.epsilon_frame_decay
         self.gamma = gamma
         self.lr = lr
+        self.alpha_decay = alpha_decay
 
         self.is_atari = is_atari
         self.n_stacked_states = n_stacked_states
@@ -300,7 +304,7 @@ class Rainbow():
         else:
             self.crit = MeanSquaredError()
         self.adam_epsilon = adam_epsilon
-        self.opt = Adam(learning_rate=self.lr, epsilon=adam_epsilon)
+        self.opt = Adam(learning_rate=self.lr) #, epsilon=adam_epsilon)
         self.init_models()
 
     def init_models(self):
@@ -349,9 +353,8 @@ class Rainbow():
             x = dense_layer(512, activation='relu')(x)
         else:
             inputs = Input(input_shape)
-            x = dense_layer(24, activation='relu')(inputs)
-            x = dense_layer(64, activation='relu')(x)
-            x = dense_layer(24, activation='relu')(x)
+            x = dense_layer(16, activation='relu')(inputs)
+            x = dense_layer(32, activation='relu')(x)
 
         if self.dueling_enabled and not self.categorical_enabled:
             # Dueling
@@ -396,6 +399,7 @@ class Rainbow():
             return self.predict_action(state)
         self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
+        
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, self.action_dim - 1)
         else:
@@ -457,9 +461,6 @@ class Rainbow():
                     else:
                         m[i][a][int(l)] += (u - bj)
                         m[i][a][int(u)] += (bj - l)
-                    # for o_a in range(self.action_dim):
-                    #     if o_a != a:
-                    #         m[i][o_a][j] = p[i][o_a][j]
             targets = m
         else:
             Q_target = Q_target * self.gamma
@@ -511,7 +512,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=64, warmup=80000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=480, avg_list_lenght=50):
+    def train(self, max_trials=500, batch_size=64, warmup=10000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=450, avg_list_lenght=10):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -603,7 +604,7 @@ class Rainbow():
                 if avg >= avg_result_exit:
                     print(f'Model has trained over the average : {avg_result_exit}')
                     break
-
+            print(self.epsilon)
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
             trial += 1
         callbacks.on_train_end()
