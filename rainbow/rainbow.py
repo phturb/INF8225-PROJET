@@ -238,7 +238,7 @@ class Rainbow():
                  n_stacked_states=3,
                  model_name="rainbow",
                  epsilon_min=0.1, # epsilon_min=0
-                 epsilon_frame_decay=0.99,#0.00000396,
+                 epsilon_frame_decay=0.999,#0.00000396,
                  epsilon_log=True,
                  gamma=0.99,
                  adam_epsilon=0.001,
@@ -260,11 +260,14 @@ class Rainbow():
         self.epsilon_max = 1.
         self.epsilon_min = epsilon_min
         self.epsilon_frame_decay = epsilon_frame_decay
-        self.epsilon_decay = (self.epsilon_max - self.epsilon_min) / self.epsilon_frame_decay
+        self.epsilon_log = epsilon_log
+        if self.epsilon_log:
+            self.epsilon_decay = epsilon_frame_decay
+        else:
+            self.epsilon_decay = (self.epsilon_max - self.epsilon_min) / self.epsilon_frame_decay
         self.gamma = gamma
         self.lr = lr
         self.alpha_decay = alpha_decay
-        self.epsilon_log = epsilon_log
 
         self.is_atari = is_atari
         self.n_stacked_states = n_stacked_states
@@ -400,7 +403,6 @@ class Rainbow():
         else:
             self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
-        
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, self.action_dim - 1)
         else:
@@ -431,7 +433,7 @@ class Rainbow():
 
         if self.prioritized_memory_enabled:
             old_targets = targets.copy()
-        if not self.dd_enabled:
+        if self.dd_enabled:
             keep_actions = np.argmax(targets, axis=1)
             Q_target = self.q_target_model.predict_on_batch(new_states)
             p_ = Q_target
@@ -606,6 +608,7 @@ class Rainbow():
                 # if avg >= avg_result_exit:
                 #     print(f'Model has trained over the average : {avg_result_exit}')
                 #     break
+            print(self.epsilon)
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
             trial += 1
         callbacks.on_train_end()
