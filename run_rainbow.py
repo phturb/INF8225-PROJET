@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--no-train', dest='train', action='store_false')
     parser.add_argument('-m', '--model-name', type=str,
                         dest="model_name", default="dqn")
+    parser.add_argument('-ms', '--max-steps', type=int, dest="max_steps", default=25000)
     parser.add_argument('-mt', '--max-trials', type=int, dest="max_trials", default=500)
     parser.add_argument('-ns', '--n-step', type=int, dest="n_step", default=1)
     parser.add_argument('-dd','--dd-enable', dest="dd_enabled",  action='store_true')
@@ -95,7 +96,7 @@ def main():
     # n_step > 1 activate multistep
     
     if args.train:
-        history = agent.train(render=args.render, max_trials=args.max_trials, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks, model_update_delay=200)
+        history = agent.train(render=args.render, max_trials=args.max_trials, max_steps=args.max_steps, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks)
         agent.save_models()
     else:
         agent.load_models()

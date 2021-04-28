@@ -238,18 +238,19 @@ class Rainbow():
                  n_stacked_states=3,
                  model_name="rainbow",
                  epsilon_min=0.1, # epsilon_min=0
-                 epsilon_frame_decay=5000,#0.00000396,
+                 epsilon_frame_decay=0.99,#0.00000396,
+                 epsilon_log=True,
                  gamma=0.99,
-                 adam_epsilon=0.00015,
+                 adam_epsilon=0.001,
                  alpha_decay=0.005,
-                 lr=0.001,
+                 lr=0.0001,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
                  dueling_enabled=False,
                  noisy_net_theta=0.5, noisy_net_enabled=False,
                  prioritization_w=0.5, prioritization_b_min=0.4, prioritization_b_max=1, prioritized_memory_enabled=False,
-                 atoms=51, v_min=-20, v_max=20, categorical_enabled=False):
+                 atoms=51, v_min=0, v_max=200, categorical_enabled=False):
         self.env = env
         self.env.seed(SEED)
         self.memory = PrioritizedMemory(capacity=memory_capacity) if prioritized_memory_enabled else DefaultMemory(max_size=memory_capacity)
@@ -263,6 +264,7 @@ class Rainbow():
         self.gamma = gamma
         self.lr = lr
         self.alpha_decay = alpha_decay
+        self.epsilon_log = epsilon_log
 
         self.is_atari = is_atari
         self.n_stacked_states = n_stacked_states
@@ -393,7 +395,10 @@ class Rainbow():
     def forward(self, state, testing=False):
         if testing:
             return self.predict_action(state)
-        self.epsilon -= self.epsilon_decay
+        if self.epsilon_log:
+            self.epsilon *= self.epsilon_decay
+        else:
+            self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
         
         if np.random.rand() <= self.epsilon:
@@ -508,7 +513,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=64, warmup=10000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100):
+    def train(self, max_trials=200, max_steps=25000, batch_size=128, warmup=500, model_update_delay=100, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100, max_trial_steps=200):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -532,7 +537,7 @@ class Rainbow():
 
         total_trials_steps = 0
         trial = 0
-        while trial < max_trials:
+        while trial < max_trials and total_trials_steps < max_steps:
             episode_start_time = time.time()
             callbacks.on_epoch_begin(trial)
             done = False
@@ -547,7 +552,7 @@ class Rainbow():
                     stacked_state.append(current_state)
                 current_state = stacked_state
                 
-            while not done:
+            while not done and trial_steps <= max_trial_steps :
                 start_time = time.time()
                 callbacks.on_batch_begin(trial_steps)                   
 
@@ -594,13 +599,13 @@ class Rainbow():
 
             
             callbacks.on_epoch_end(trial, episode_logs)
-
-            if len(total_rewards_history) >= avg_list_lenght:
-                avg = sum(total_rewards_history)/len(total_rewards_history)
-                print(f"Last {avg_list_lenght} average score : {avg}")
-                if avg >= avg_result_exit:
-                    print(f'Model has trained over the average : {avg_result_exit}')
-                    break
+            
+            avg = sum(total_rewards_history)/len(total_rewards_history)
+            print(f"Last {avg_list_lenght} average score : {avg}\n\t and with a total steps of {total_trials_steps}")
+            # if len(total_rewards_history) >= avg_list_lenght:
+                # if avg >= avg_result_exit:
+                #     print(f'Model has trained over the average : {avg_result_exit}')
+                #     break
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
             trial += 1
         callbacks.on_train_end()
