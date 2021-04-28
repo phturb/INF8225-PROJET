@@ -234,16 +234,16 @@ def atari_state_processor(state):
 class Rainbow():
     def __init__(self,
                  env,
-                 memory_capacity=50000, # memory_capacity=1000000,
+                 memory_capacity=10000, # memory_capacity=1000000,
                  n_stacked_states=3,
                  model_name="rainbow",
                  epsilon_min=0.1, # epsilon_min=0
-                 epsilon_frame_decay=0.999,#0.00000396,
-                 epsilon_log=True,
+                 epsilon_frame_decay=5000, #0.999,#0.00000396,
+                 epsilon_log=False,
                  gamma=0.99,
                  adam_epsilon=0.001,
                  alpha_decay=0.005,
-                 lr=0.0001,
+                 lr=0.001,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
@@ -398,10 +398,10 @@ class Rainbow():
     def forward(self, state, testing=False):
         if testing:
             return self.predict_action(state)
-        if self.epsilon_log:
-            self.epsilon *= self.epsilon_decay
-        else:
-            self.epsilon -= self.epsilon_decay
+        # if self.epsilon_log:
+        #     self.epsilon *= self.epsilon_decay
+        # else:
+        self.epsilon -= self.epsilon_decay
         self.epsilon = max(self.epsilon_min, self.epsilon)
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, self.action_dim - 1)
@@ -515,7 +515,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=200, max_steps=25000, batch_size=128, warmup=500, model_update_delay=100, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100, max_trial_steps=200):
+    def train(self, max_trials=200, max_steps=25000, batch_size=64, warmup=500, model_update_delay=200, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100, max_trial_steps=200):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -568,7 +568,7 @@ class Rainbow():
                     next_state = np.append(stacked_state[1:], [next_state], axis=0)
                 self.remember(current_state, action, reward, next_state , done)
                 metrics = None
-                if warmup <= total_trials_steps:
+                if warmup <= total_trials_steps: # and total_trials_steps % 2 == 0:
                     metrics = self.backward(batch_size)
 
                 if total_trials_steps % model_update_delay == 0:
