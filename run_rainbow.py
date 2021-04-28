@@ -1,3 +1,10 @@
+import numpy as np
+import random
+import tensorflow as tf
+SEED = 42
+np.random.seed(SEED)
+random.seed(SEED)
+tf.random.set_seed(SEED)
 import gym
 import argparse
 import sys
@@ -66,6 +73,7 @@ def main():
     model_name += model_ext + "_" + env_name
 
     env = gym.make(env_name)
+    env.seed(SEED)
 
     print(f"Starting training for agent\n\tnamed :\t{model_name}\n\tgym :\t{env_name}")
 
@@ -87,7 +95,7 @@ def main():
     # n_step > 1 activate multistep
     
     if args.train:
-        history = agent.train(render=args.render, max_trials=args.max_trials, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks, model_update_delay=100)
+        history = agent.train(render=args.render, max_trials=args.max_trials, warmup=args.warmup, n_step=args.n_step, callbacks=callbacks, model_update_delay=200)
         agent.save_models()
     else:
         agent.load_models()

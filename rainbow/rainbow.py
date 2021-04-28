@@ -20,10 +20,6 @@ from keras.callbacks import History, CallbackList
 
 SEED = 42
 
-np.random.seed(SEED)
-random.seed(SEED)
-tf.random.set_seed(SEED)
-
 class DefaultMemory():
     def __init__(self, max_size=10000):
         self.max_size = max_size
@@ -512,7 +508,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=500, batch_size=64, warmup=10000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=450, avg_list_lenght=10):
+    def train(self, max_trials=500, batch_size=64, warmup=10000, model_update_delay=1, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
