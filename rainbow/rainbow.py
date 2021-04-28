@@ -597,10 +597,10 @@ class Rainbow():
 
             if len(total_rewards_history) >= avg_list_lenght:
                 avg = sum(total_rewards_history)/len(total_rewards_history)
+                print(f"Last {avg_list_lenght} average score : {avg}")
                 if avg >= avg_result_exit:
                     print(f'Model has trained over the average : {avg_result_exit}')
                     break
-            print(self.epsilon)
             print(f"Trial {trial} complete with reward : {trial_total_reward} in {episode_logs['episode_time']}ms")
             trial += 1
         callbacks.on_train_end()
