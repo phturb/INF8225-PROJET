@@ -223,13 +223,22 @@ class NoisyDense(Layer):
         return config
 
 def atari_state_processor(state):
-    INPUT_SHAPE = (84, 84)
-    CROP_SHAPE = (0,35,160,195)
-    img = Image.fromarray(state)
-    img = img.crop(CROP_SHAPE).resize(INPUT_SHAPE).convert('L')  # resize and convert to grayscale
-    processed_state = np.array(img) / 255
-    processed_state = processed_state.reshape(84, 84, 1)
-    return processed_state
+    # INPUT_SHAPE = (10, 10, 6)
+    # CROP_SHAPE = (0,35,160,195)
+    # img = Image.fromarray(state)
+    # img = img.crop(CROP_SHAPE).resize(INPUT_SHAPE).convert('L')  # resize and convert to grayscale
+    # processed_state = np.array(img) / 255
+    # processed_state = processed_state.reshape(84, 84, 1)
+    return state
+
+# def atari_state_processor(state):
+#     INPUT_SHAPE = (84, 84)
+#     CROP_SHAPE = (0,35,160,195)
+#     img = Image.fromarray(state)
+#     img = img.crop(CROP_SHAPE).resize(INPUT_SHAPE).convert('L')  # resize and convert to grayscale
+#     processed_state = np.array(img) / 255
+#     processed_state = processed_state.reshape(84, 84, 1)
+#     return processed_state
 
 class Rainbow():
     def __init__(self,
@@ -238,19 +247,19 @@ class Rainbow():
                  n_stacked_states=3,
                  model_name="rainbow",
                  epsilon_min=0.1, # epsilon_min=0
-                 epsilon_frame_decay=5000, #0.999,#0.00000396,
+                 epsilon_frame_decay=50000, #0.999,#0.00000396,
                  epsilon_log=False,
                  gamma=0.99,
                  adam_epsilon=0.001,
                  alpha_decay=0.005,
-                 lr=0.001,
+                 lr=0.0001,
                  tau=1,
                  is_atari=False,
                  dd_enabled=False,
                  dueling_enabled=False,
                  noisy_net_theta=0.5, noisy_net_enabled=False,
                  prioritization_w=0.5, prioritization_b_min=0.4, prioritization_b_max=1, prioritized_memory_enabled=False,
-                 atoms=51, v_min=0, v_max=200, categorical_enabled=False):
+                 atoms=51, v_min=0, v_max=15, categorical_enabled=False):
         self.env = env
         self.env.seed(SEED)
         self.memory = PrioritizedMemory(capacity=memory_capacity) if prioritized_memory_enabled else DefaultMemory(max_size=memory_capacity)
@@ -272,7 +281,7 @@ class Rainbow():
         self.is_atari = is_atari
         self.n_stacked_states = n_stacked_states
         if self.is_atari:
-            self.state_dim = (n_stacked_states,) + (84, 84, 1)
+            self.state_dim = (n_stacked_states,) + (10, 10, 4) #(84, 84, 1)
         else:
             self.state_dim = env.observation_space.shape
         self.tau = tau
@@ -347,11 +356,11 @@ class Rainbow():
             name+="_Noisy_Net"
         if self.is_atari:
             inputs = Input(input_shape)
-            x = Convolution2D(32, (8,8) , strides=(4, 4),activation='relu')(inputs)
-            x = Convolution2D(64, (4,4), strides=(2, 2), activation='relu')(x)
-            x = Convolution2D(64, (3,3), strides=(1, 1), activation='relu')(x)
+            # x = Convolution2D(32, (8,8) , strides=(4, 4),activation='relu')(inputs)
+            # x = Convolution2D(16, (2,2), strides=(1, 1), activation='relu')(inputs)
+            x = Convolution2D(16, (3,3), strides=(1, 1), activation='relu')(inputs)
             x = Flatten()(x)
-            x = dense_layer(512, activation='relu')(x)
+            x = dense_layer(128, activation='relu')(x)
         else:
             inputs = Input(input_shape)
             x = dense_layer(16, activation='relu')(inputs)
@@ -515,7 +524,7 @@ class Rainbow():
             state, action, _, _ = self.multistep_buffer.pop(0)
             self.memory.append(state, action, reward, state, True)
 
-    def train(self, max_trials=200, max_steps=25000, batch_size=64, warmup=500, model_update_delay=200, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100, max_trial_steps=200):
+    def train(self, max_trials=200, max_steps=25000, batch_size=64, warmup=10000, model_update_delay=1000, render=False, n_step=1, callbacks=None, avg_result_exit=195.0, avg_list_lenght=100, max_trial_steps=200):
         assert n_step > 0
 
         callbacks = [] if not callbacks else callbacks[:]
@@ -554,7 +563,7 @@ class Rainbow():
                     stacked_state.append(current_state)
                 current_state = stacked_state
                 
-            while not done and trial_steps <= max_trial_steps :
+            while not done: # and trial_steps <= max_trial_steps :
                 start_time = time.time()
                 callbacks.on_batch_begin(trial_steps)                   
 

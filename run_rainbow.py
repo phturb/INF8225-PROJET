@@ -5,19 +5,19 @@ SEED = 42
 np.random.seed(SEED)
 random.seed(SEED)
 tf.random.set_seed(SEED)
+from collections import namedtuple
+import gym_minatar
 import gym
 import argparse
 import sys
 from rainbow.rainbow import Rainbow
 from keras.callbacks import TensorBoard, ModelCheckpoint
-# from ddqn import DDQN
-
 
 def main():
     print(sys.argv)
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--env", type=str, dest="env_name", default="cart-pole",
-                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman", "space-invaders", "pendulum"])
+                        choices=["mountain-car", "pong", "brick-breaker", "cart-pole", "pacman", "space-invaders", "pendulum", "minatar"])
     parser.add_argument('-t', '--train', dest='train', action='store_true')
     parser.add_argument('--no-train', dest='train', action='store_false')
     parser.add_argument('-m', '--model-name', type=str,
@@ -31,7 +31,7 @@ def main():
     parser.add_argument('-nyt','--noisy-net-theta', type=float, dest="noisy_net_theta", default=0.5)
     parser.add_argument('-pm','--prioritized-memory-enabled',dest="prioritized_memory_enabled", action='store_true')
     parser.add_argument('-di','--categorical-enabled', dest="categorical_enabled", action='store_true')
-    parser.add_argument('-wa','--warmup', dest="warmup", type=int, default=100)
+    parser.add_argument('-wa','--warmup', dest="warmup", type=int, default=500)
     parser.add_argument('-r', '--render', dest='render', action='store_true')
     parser.add_argument('--no-render', dest='render', action='store_false')
     parser.add_argument('--no-tensorboard', dest='w_tensorboard', action='store_false')
@@ -51,9 +51,10 @@ def main():
         "brick-breaker": "Breakout-v0",
         "pacman": "MsPacman-v0",
         "space-invaders": "SpaceInvaders-v0",
-        "pendulum" : "Acrobot-v1"
+        "pendulum" : "Acrobot-v1",
+        "minatar" : "Breakout-MinAtar-v0"
     }
-    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman" or args.env_name == "space-invaders"
+    is_atari = args.env_name == "pong" or args.env_name == "brick-breaker" or args.env_name =="pacman" or args.env_name == "space-invaders" or args.env_name == "minatar"
 
     model_name = args.model_name
     model_ext = ""
@@ -73,6 +74,9 @@ def main():
     env_name = env_choices[args.env_name]
     model_name += model_ext + "_" + env_name
 
+    # if args.env_name == "minatar":
+    #     env = MinAtarEnv(env_name)
+    # else:
     env = gym.make(env_name)
     env.seed(SEED)
 
